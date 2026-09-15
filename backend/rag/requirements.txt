@@ -1,0 +1,13 @@
+boto3
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+httpx
+pypdf
+# OCR is optional locally; it is included in the production container.
+pytesseract
+pdf2image
+chromadb
+sentence-transformers
