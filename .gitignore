@@ -149,9 +149,11 @@ activemq-data/
 
 # Environments
 .env
+.env.local
 .envrc
 .chroma/
 .venv
+backend/rag/.chroma/
 env/
 venv/
 ENV/
