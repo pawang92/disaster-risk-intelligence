@@ -266,13 +266,11 @@ class DisasterRag:
 
         # Do not return obviously irrelevant results when a threshold is set.
         if self.settings.min_retrieval_score > 0:
-            filtered = [
+            chunks = [
                 chunk
                 for chunk in chunks
                 if chunk.score >= self.settings.min_retrieval_score
             ]
-            if filtered:
-                chunks = filtered
 
         return chunks
 
