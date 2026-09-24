@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -27,3 +27,17 @@ class AskResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     store: str
+    collection: str
+    collection_count: int
+    embedding_provider: str
+    answer_provider: str
+
+
+class RetrievalTestRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=4000)
+    district: str | None = None
+    disaster_type: str | None = None
+
+
+class RetrievalTestResponse(BaseModel):
+    diagnostics: dict[str, Any]
