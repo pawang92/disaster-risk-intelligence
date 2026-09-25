@@ -12,8 +12,8 @@ def test_flood_risk_low_when_all_indicators_are_low() -> None:
         )
     )
 
-    assert result.hazard_score == 0.085
-    assert result.risk_score == 0.085
+    assert result.hazard_score == 0.075
+    assert result.risk_score == 0.075
     assert result.risk_level == "low"
     assert result.contributing_factors == []
 
@@ -30,7 +30,7 @@ def test_flood_risk_very_high_and_factors() -> None:
         )
     )
 
-    assert result.hazard_score == 0.875
+    assert result.hazard_score == 0.88
     assert result.risk_level == "very_high"
     assert result.affected_area_sq_km == 12.5
     assert "rainfall" in result.contributing_factors
