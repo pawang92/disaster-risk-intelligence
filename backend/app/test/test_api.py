@@ -24,5 +24,8 @@ def test_risk_assessment_contract() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["hazard"] == "flood"
-    assert body["risk_assessment"]["risk_level"] == "not_calculated"
+    assert body["risk_assessment"]["risk_level"] == "low"
+    assert body["risk_assessment"]["risk_score"] == 0.0
+    assert body["risk_assessment"]["methodology_version"] == "flood-v0.1"
+    assert body["risk_assessment"]["inputs"]["indicator_source"] == "local_configuration"
     assert "request_id" in body
