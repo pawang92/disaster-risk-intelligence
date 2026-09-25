@@ -152,6 +152,7 @@ activemq-data/
 .env.local
 .envrc
 .chroma/
+.chroma-test/
 .venv
 backend/rag/.chroma/
 env/

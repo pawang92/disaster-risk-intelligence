@@ -33,7 +33,6 @@ class RetrievedChunk:
             score=round(self.score, 4),
         )
 
-
 class DisasterRag:
     """Local-first RAG service with optional cloud providers."""
 
@@ -65,6 +64,7 @@ class DisasterRag:
         return SentenceTransformer(
             self.settings.local_embedding_model,
             device="cpu",
+            local_files_only=True,
         )
 
     def embed(self, text: str, kind: str = "passage") -> list[float]:
@@ -394,12 +394,20 @@ class DisasterRag:
 
     @staticmethod
     def _extract_openai_style_text(data: dict[str, Any]) -> str:
+        # Prefer the explicit output_text field when available.
         output_text = data.get("output_text")
         if output_text:
             return str(output_text).strip()
 
+        # Otherwise, only extract text from assistant message items.
         for item in data.get("output", []):
+            if item.get("type") != "message":
+                continue
+
             for content in item.get("content", []):
+                if content.get("type") != "output_text":
+                    continue
+
                 text = content.get("text")
                 if text:
                     return str(text).strip()

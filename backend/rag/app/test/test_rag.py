@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import pytest
 
 from app.bedrock_rag import DisasterRag
 from app.ingest import chunk_text, language_of, normalize_text
@@ -98,7 +99,7 @@ def test_retrieval_returns_chunks(monkeypatch):
     assert len(chunks) == 1
     assert chunks[0].source_key == "guide.pdf"
     assert chunks[0].page == 2
-    assert chunks[0].score == 0.82
+    assert chunks[0].score == pytest.approx(0.82)
 
 
 def test_retrieval_diagnostics(monkeypatch):

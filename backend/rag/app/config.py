@@ -21,10 +21,10 @@ class Settings(BaseSettings):
     # Primary provider: grok | gemini | ollama | bedrock
     answer_provider: str = "grok"
 
-    # Grok / xAI
+    # Grok 
     grok_api_key: str = ""
-    grok_base_url: str = "https://api.x.ai/v1"
-    grok_model: str = "grok-4.6"
+    grok_base_url: str = "https://api.groq.com/openai/v1"
+    grok_model: str = "openai/gpt-oss-120b"
     grok_timeout_seconds: float = 180.0
 
     # Gemini
