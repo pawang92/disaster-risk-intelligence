@@ -27,6 +27,12 @@ class Settings(BaseSettings):
 
     default_hazard: str = "flood"
     risk_engine_version: str = "0.1.0"
+    flood_elevation_risk: float = 0.0
+    flood_rainfall_risk: float = 0.0
+    flood_extent_risk: float = 0.0
+    flood_river_proximity_risk: float = 0.0
+    flood_historical_risk: float = 0.0
+    flood_affected_area_sq_km: float | None = None
 
     llm_provider: str = "grok"
     llm_fallbacks: str = "gemini,ollama"
