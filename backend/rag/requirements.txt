@@ -11,3 +11,4 @@ pytesseract
 pdf2image
 chromadb
 sentence-transformers
+pytest
