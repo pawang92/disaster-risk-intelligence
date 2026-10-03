@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import uuid4
 
 from app.core.config import Settings
@@ -12,38 +13,59 @@ from app.domain.schemas import (
     RiskAssessmentResponse,
 )
 from app.risk.flood import FloodRiskEngine, FloodRiskInput
+from app.spatial.adapters.elevation import ElevationAdapter
 from app.spatial.engine import SpatialEngine
 
 
 @dataclass(slots=True)
 class RiskOrchestrator:
-    """Coordinate deterministic risk engines, spatial intelligence and later AI services."""
+    """Coordinate spatial adapters, deterministic risk engines and later AI services."""
 
     settings: Settings
     spatial_engine: SpatialEngine | None = None
     flood_engine: FloodRiskEngine | None = None
+    elevation_adapter: ElevationAdapter | None = None
 
     def __post_init__(self) -> None:
         if self.spatial_engine is None:
             self.spatial_engine = SpatialEngine()
         if self.flood_engine is None:
             self.flood_engine = FloodRiskEngine()
+        if self.elevation_adapter is None:
+            project_root = Path(__file__).resolve().parents[3]
+            srtm_path = project_root / "data" / "dem" / "mumbai" / "srtm" / "srtm_mumbai.tif"
+            self.elevation_adapter = ElevationAdapter(srtm_path)
 
     async def assess(self, request: RiskAssessmentRequest) -> RiskAssessmentResponse:
         request_id = str(uuid4())
         spatial = await self.spatial_engine.resolve(request.location)
 
         if request.hazard.value != "flood":
-            return self._unsupported_hazard_response(request, request_id, spatial.source, spatial.map_data)
+            return self._unsupported_hazard_response(
+                request, request_id, spatial.source, spatial.map_data
+            )
+
+        elevation = self.elevation_adapter.sample(
+            latitude=request.location.latitude,
+            longitude=request.location.longitude,
+        )
 
         flood_inputs = FloodRiskInput(
-            elevation_risk=self.settings.flood_elevation_risk,
+            elevation_risk=elevation.elevation_risk,
             rainfall_risk=self.settings.flood_rainfall_risk,
             flood_extent_risk=self.settings.flood_extent_risk,
             river_proximity_risk=self.settings.flood_river_proximity_risk,
             historical_flood_risk=self.settings.flood_historical_risk,
             affected_area_sq_km=self.settings.flood_affected_area_sq_km,
-            source_metadata={"source": "local_configuration"},
+            source_metadata={
+                "elevation": {
+                    "source": elevation.source,
+                    "dataset": elevation.dataset,
+                    "elevation_m": elevation.elevation_m,
+                    "resolution_x": elevation.resolution_x,
+                    "resolution_y": elevation.resolution_y,
+                },
+            },
         )
         result = self.flood_engine.calculate(flood_inputs)
 
@@ -60,16 +82,22 @@ class RiskOrchestrator:
                     "hazard_score": result.hazard_score,
                     "contributing_factors": result.contributing_factors,
                     "spatial_source": spatial.source,
-                    "indicator_source": "local_configuration",
+                    "indicator_source": "real_spatial_data",
+                    "elevation": {
+                        "elevation_m": elevation.elevation_m,
+                        "elevation_risk": elevation.elevation_risk,
+                        "source": elevation.source,
+                        "dataset": elevation.dataset,
+                    },
                 },
             ),
             exposure=ExposureAssessment(),
             recommendations=[],
             map_data=spatial.map_data,
             explanation=(
-                "Flood risk was calculated deterministically from the configured "
-                "normalized flood indicators. Real spatial and environmental data "
-                "adapters will replace these local inputs in the next phase."
+                "Flood risk uses the real SRTM elevation adapter. Rainfall, "
+                "flood extent, river proximity, and historical flood indicators "
+                "remain configured placeholders until their adapters are connected."
             ),
         )
 
@@ -82,7 +110,10 @@ class RiskOrchestrator:
             risk_assessment=RiskAssessment(
                 risk_level="not_implemented",
                 methodology_version=None,
-                inputs={"status": "hazard_engine_not_connected", "spatial_source": spatial_source},
+                inputs={
+                    "status": "hazard_engine_not_connected",
+                    "spatial_source": spatial_source,
+                },
             ),
             exposure=None,
             recommendations=[],
