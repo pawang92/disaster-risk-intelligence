@@ -1,9 +1,15 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
+
 import numpy as np
 import rasterio
 from pyproj import Transformer
+from rasterio.crs import CRS
+from rasterio.transform import rowcol
+from rasterio.warp import Resampling, calculate_default_transform, reproject
+
 
 @dataclass(frozen=True, slots=True)
 class FloodExtentResult:
@@ -20,70 +26,71 @@ class FloodExtentResult:
 
 class FloodExtentAdapter:
     """
-    Adapter for a locally stored Sentinel-1 flood extent raster.
+    Sample Sentinel-1 flood-extent raster and calculate flooded area.
 
-    Expected raster values:
+    The raster is expected to contain:
+        0 = non-flooded
+        1 = flooded
 
-        0.0 -> no flood
-        0.5 -> intermediate / partial flood
-        1.0 -> flood
+    Flooded area is calculated in a projected CRS so that the
+    result is expressed correctly in square kilometres.
     """
 
     def __init__(
         self,
         raster_path: str | Path,
+        *,
+        projected_crs: str = "EPSG:6933",
     ) -> None:
         self.raster_path = Path(raster_path)
 
         if not self.raster_path.exists():
             raise FileNotFoundError(
-                f"Sentinel-1 flood extent raster not found: "
-                f"{self.raster_path}"
+                f"Flood extent raster not found: {self.raster_path}"
             )
 
-        with rasterio.open(self.raster_path) as src:
-            if src.crs is None:
-                raise ValueError(
-                    "Sentinel-1 flood extent raster does not contain a CRS."
-                )
-
-            self._crs = src.crs
-            self._resolution_x = float(src.res[0])
-            self._resolution_y = float(src.res[1])
-            self._bounds = src.bounds
-
-            self._transformer = Transformer.from_crs(
-                "EPSG:4326",
-                src.crs,
-                always_xy=True,
-            )
-
-            self._flooded_area_sq_km = (
-                self._calculate_flooded_area(src)
-            )
+        self.projected_crs = CRS.from_string(projected_crs)
 
     def sample(
         self,
         latitude: float,
         longitude: float,
     ) -> FloodExtentResult:
-
         with rasterio.open(self.raster_path) as src:
+            if src.crs is None:
+                raise ValueError(
+                    "Flood extent raster does not contain a CRS."
+                )
 
-            x, y = self._transformer.transform(
+            # ---------------------------------------------------------
+            # 1. Transform WGS84 coordinates into raster CRS
+            # ---------------------------------------------------------
+            transformer = Transformer.from_crs(
+                "EPSG:4326",
+                src.crs,
+                always_xy=True,
+            )
+
+            x, y = transformer.transform(
                 longitude,
                 latitude,
             )
 
+            # ---------------------------------------------------------
+            # 2. Check requested location against raster bounds
+            # ---------------------------------------------------------
             if not (
                 src.bounds.left <= x <= src.bounds.right
                 and src.bounds.bottom <= y <= src.bounds.top
             ):
                 raise ValueError(
-                    "Requested location is outside the "
-                    "Sentinel-1 flood extent raster bounds."
+                    "Requested location is outside the flood extent "
+                    "raster bounds."
                 )
 
+            # ---------------------------------------------------------
+            # 3. Sample flood value at requested location
+            # ---------------------------------------------------------
             sampled = next(
                 src.sample(
                     [(x, y)],
@@ -95,20 +102,34 @@ class FloodExtentAdapter:
 
             if np.ma.is_masked(value):
                 raise ValueError(
-                    "Sentinel-1 flood extent is NoData "
-                    "at the requested location."
+                    "Flood extent raster contains NoData at the "
+                    "requested location."
                 )
 
             flood_extent_value = float(value)
 
             if not np.isfinite(flood_extent_value):
                 raise ValueError(
-                    "Sentinel-1 flood extent value is not finite."
+                    "Flood extent value is not finite at the "
+                    "requested location."
                 )
 
-            flood_extent_risk = self._normalize_risk(
+            # ---------------------------------------------------------
+            # 4. Convert flood value into risk
+            #
+            # 0 -> no flood risk
+            # 1 -> maximum flood risk
+            #
+            # Values between 0 and 1 are also supported.
+            # ---------------------------------------------------------
+            flood_extent_risk = self._flood_extent_risk(
                 flood_extent_value
             )
+
+            # ---------------------------------------------------------
+            # 5. Calculate total flooded area correctly
+            # ---------------------------------------------------------
+            flooded_area_sq_km = self._calculate_flooded_area_sq_km()
 
             return FloodExtentResult(
                 latitude=latitude,
@@ -122,111 +143,92 @@ class FloodExtentAdapter:
                     4,
                 ),
                 flooded_area_sq_km=round(
-                    self._flooded_area_sq_km,
+                    flooded_area_sq_km,
                     4,
                 ),
                 source="Sentinel-1",
                 dataset=self.raster_path.name,
-                resolution_x=self._resolution_x,
-                resolution_y=self._resolution_y,
+                resolution_x=float(src.res[0]),
+                resolution_y=float(src.res[1]),
             )
 
-    @staticmethod
-    def _normalize_risk(
-        value: float,
+    def _flood_extent_risk(
+        self,
+        flood_extent_value: float,
     ) -> float:
         """
-        Keep flood extent risk between 0 and 1.
+        Normalize flood extent value to 0..1.
+
+        0 = not flooded
+        1 = flooded
         """
+
+        if flood_extent_value <= 0:
+            return 0.0
+
+        if flood_extent_value >= 1:
+            return 1.0
 
         return max(
             0.0,
             min(
                 1.0,
-                value,
+                flood_extent_value,
             ),
         )
 
-    @staticmethod
-    def _calculate_flooded_area(
-        src,
-    ) -> float:
+    def _calculate_flooded_area_sq_km(self) -> float:
         """
-        Calculate approximate flooded area in square kilometres.
+        Reproject the flood raster to an equal-area/projected CRS
+        and calculate the total area of pixels classified as flooded.
 
-        The raster is in geographic coordinates (WGS84).
-        Pixel dimensions are therefore converted approximately
-        to metres using the latitude of the raster centre.
-
-        Flood pixels are defined as values > 0.
+        EPSG:6933 is used so that pixel dimensions are in metres.
         """
 
-        data = src.read(
-            1,
-            masked=True,
-        )
+        with rasterio.open(self.raster_path) as src:
+            if src.crs is None:
+                raise ValueError(
+                    "Flood extent raster does not contain a CRS."
+                )
 
-        values = np.ma.filled(
-            data,
-            0.0,
-        )
+            transform, width, height = calculate_default_transform(
+                src.crs,
+                self.projected_crs,
+                src.width,
+                src.height,
+                *src.bounds,
+            )
 
-        flooded = (
-            np.isfinite(values)
-            & (values > 0)
-        )
+            destination = np.zeros(
+                (height, width),
+                dtype=np.uint8,
+            )
 
-        flooded_pixels = int(
-            np.count_nonzero(flooded)
-        )
+            reproject(
+                source=rasterio.band(src, 1),
+                destination=destination,
+                src_transform=src.transform,
+                src_crs=src.crs,
+                dst_transform=transform,
+                dst_crs=self.projected_crs,
+                resampling=Resampling.nearest,
+            )
 
-        if flooded_pixels == 0:
-            return 0.0
+            # Sentinel-1 flood mask:
+            # 1 = flooded
+            # 0 = non-flooded
+            flooded_pixels = int(
+                np.count_nonzero(destination == 1)
+            )
 
-        # Raster centre latitude.
-        center_latitude = (
-            src.bounds.top + src.bounds.bottom
-        ) / 2.0
+            pixel_area_sq_m = abs(
+                transform.a * transform.e
+            )
 
-        # Approximate metres per degree.
-        latitude_radians = np.deg2rad(
-            center_latitude
-        )
+            flooded_area_sq_km = (
+                flooded_pixels
+                * pixel_area_sq_m
+                / 1_000_000
+            )
 
-        metres_per_degree_lat = (
-            111_320.0
-        )
-
-        metres_per_degree_lon = (
-            111_320.0
-            * np.cos(latitude_radians)
-        )
-
-        pixel_width_m = (
-            abs(src.res[0])
-            * metres_per_degree_lon
-        )
-
-        pixel_height_m = (
-            abs(src.res[1])
-            * metres_per_degree_lat
-        )
-
-        pixel_area_m2 = (
-            pixel_width_m
-            * pixel_height_m
-        )
-
-        flooded_area_m2 = (
-            flooded_pixels
-            * pixel_area_m2
-        )
-
-        flooded_area_sq_km = (
-            flooded_area_m2
-            / 1_000_000.0
-        )
-
-        return float(
-            flooded_area_sq_km
-        )
+            return float(flooded_area_sq_km)

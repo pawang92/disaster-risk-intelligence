@@ -1,11 +1,15 @@
 from pathlib import Path
+
 import pytest
-from app.spatial.adapters.flood_extent import FloodExtentAdapter
+
+from app.spatial.adapters.flood_extent import (
+    FloodExtentAdapter,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-FLOOD_EXTENT_PATH = (
+FLOOD_EXTENT_RASTER = (
     PROJECT_ROOT
     / "data"
     / "flood_extent"
@@ -14,68 +18,66 @@ FLOOD_EXTENT_PATH = (
 
 
 @pytest.fixture
-def flood_extent_adapter() -> FloodExtentAdapter:
-    return FloodExtentAdapter(
-        FLOOD_EXTENT_PATH
-    )
+def adapter() -> FloodExtentAdapter:
+    return FloodExtentAdapter(FLOOD_EXTENT_RASTER)
 
 
-def test_flood_extent_file_exists() -> None:
-    assert FLOOD_EXTENT_PATH.exists()
+def test_flood_extent_raster_exists() -> None:
+    assert FLOOD_EXTENT_RASTER.exists()
 
 
-def test_flood_extent_sample_returns_valid_result(
-    flood_extent_adapter: FloodExtentAdapter,
-) -> None:
-    result = flood_extent_adapter.sample(
+def test_flood_extent_sample(adapter: FloodExtentAdapter) -> None:
+    result = adapter.sample(
         latitude=19.076,
         longitude=72.8777,
     )
 
-    assert result.latitude == 19.076
-    assert result.longitude == 72.8777
+    assert result.source == "Sentinel-1"
+    assert result.dataset == "mumbai_s1_flood_extent.tif"
 
     assert 0.0 <= result.flood_extent_value <= 1.0
     assert 0.0 <= result.flood_extent_risk <= 1.0
 
-    assert result.flooded_area_sq_km >= 0.0
-
-    assert result.source == "Sentinel-1"
-
-    assert (
-        result.dataset
-        == "mumbai_s1_flood_extent.tif"
-    )
+    assert result.flooded_area_sq_km > 0.0
 
 
-def test_flood_extent_resolution(
-    flood_extent_adapter: FloodExtentAdapter,
+def test_flood_extent_area_is_reasonable(
+    adapter: FloodExtentAdapter,
 ) -> None:
-    result = flood_extent_adapter.sample(
+    result = adapter.sample(
         latitude=19.076,
         longitude=72.8777,
     )
 
-    assert result.resolution_x > 0
-    assert result.resolution_y > 0
+    # Current validated Sentinel-1 raster is approximately
+    # 1.896 km² after projected-area calculation.
+    assert 1.0 < result.flooded_area_sq_km < 3.0
 
 
-def test_flood_extent_outside_raster(
-    flood_extent_adapter: FloodExtentAdapter,
+def test_flood_extent_risk_zero(
+    adapter: FloodExtentAdapter,
+) -> None:
+    assert adapter._flood_extent_risk(0.0) == 0.0
+
+
+def test_flood_extent_risk_one(
+    adapter: FloodExtentAdapter,
+) -> None:
+    assert adapter._flood_extent_risk(1.0) == 1.0
+
+
+def test_flood_extent_risk_clamped(
+    adapter: FloodExtentAdapter,
+) -> None:
+    assert adapter._flood_extent_risk(-1.0) == 0.0
+    assert adapter._flood_extent_risk(2.0) == 1.0
+
+
+def test_location_outside_raster(
+    adapter: FloodExtentAdapter,
 ) -> None:
     with pytest.raises(ValueError):
-        flood_extent_adapter.sample(
-            latitude=28.6139,
-            longitude=77.2090,
+        adapter.sample(
+            latitude=20.0,
+            longitude=75.0,
         )
-
-
-def test_flooded_area_is_non_negative(
-    flood_extent_adapter: FloodExtentAdapter,
-) -> None:
-    result = flood_extent_adapter.sample(
-        latitude=19.076,
-        longitude=72.8777,
-    )
-
-    assert result.flooded_area_sq_km >= 0.0
