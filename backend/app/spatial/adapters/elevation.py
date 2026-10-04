@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
-
 import numpy as np
 import rasterio
 from pyproj import Transformer
@@ -22,7 +20,6 @@ class ElevationResult:
 
 class ElevationAdapter:
     """Sample elevation from a local SRTM DEM and normalize it to 0..1 risk."""
-
     def __init__(
         self,
         raster_path: str | Path,
