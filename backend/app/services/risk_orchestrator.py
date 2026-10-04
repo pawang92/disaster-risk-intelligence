@@ -15,6 +15,7 @@ from app.risk.flood import FloodRiskEngine, FloodRiskInput
 from app.spatial.adapters.elevation import ElevationAdapter
 from app.spatial.adapters.rainfall import RainfallAdapter
 from app.spatial.adapters.flood_extent import FloodExtentAdapter
+from app.spatial.adapters.river_proximity import RiverProximityAdapter
 from app.spatial.engine import SpatialEngine
 
 
@@ -28,6 +29,7 @@ class RiskOrchestrator:
     elevation_adapter: ElevationAdapter | None = None
     rainfall_adapter: RainfallAdapter | None = None
     flood_extent_adapter: FloodExtentAdapter | None = None
+    river_proximity_adapter: RiverProximityAdapter | None = None
 
     def __post_init__(self) -> None:
         # ---------------------------------------------------------
@@ -61,7 +63,7 @@ class RiskOrchestrator:
             )
 
         # ---------------------------------------------------------
-        # Rainfall / IMERG adapter
+        # Rainfall / NASA GPM IMERG adapter
         # ---------------------------------------------------------
 
         if self.rainfall_adapter is None:
@@ -100,6 +102,22 @@ class RiskOrchestrator:
                 flood_extent_path
             )
 
+        # ---------------------------------------------------------
+        # River proximity / HydroSHEDS adapter
+        # ---------------------------------------------------------
+
+        if self.river_proximity_adapter is None:
+            river_path = (
+                project_root
+                / "data"
+                / "rivers"
+                / "mumbai_hydrosheds_river_network.geojson"
+            )
+
+            self.river_proximity_adapter = RiverProximityAdapter(
+                river_path
+            )
+
     async def assess(
         self,
         request: RiskAssessmentRequest,
@@ -123,7 +141,7 @@ class RiskOrchestrator:
             )
 
         # ---------------------------------------------------------
-        # 1. Sample real elevation data
+        # 1. Sample elevation
         # ---------------------------------------------------------
 
         elevation = self.elevation_adapter.sample(
@@ -132,7 +150,7 @@ class RiskOrchestrator:
         )
 
         # ---------------------------------------------------------
-        # 2. Sample real rainfall data
+        # 2. Sample rainfall
         # ---------------------------------------------------------
 
         rainfall = self.rainfall_adapter.sample(
@@ -141,7 +159,7 @@ class RiskOrchestrator:
         )
 
         # ---------------------------------------------------------
-        # 3. Sample real Sentinel-1 flood extent data
+        # 3. Sample Sentinel-1 flood extent
         # ---------------------------------------------------------
 
         flood_extent = self.flood_extent_adapter.sample(
@@ -150,7 +168,16 @@ class RiskOrchestrator:
         )
 
         # ---------------------------------------------------------
-        # 4. Build deterministic Flood Risk Engine input
+        # 4. Sample river proximity
+        # ---------------------------------------------------------
+
+        river_proximity = self.river_proximity_adapter.sample(
+            latitude=request.location.latitude,
+            longitude=request.location.longitude,
+        )
+
+        # ---------------------------------------------------------
+        # 5. Build deterministic Flood Risk Engine input
         # ---------------------------------------------------------
 
         flood_inputs = FloodRiskInput(
@@ -158,20 +185,19 @@ class RiskOrchestrator:
 
             rainfall_risk=rainfall.rainfall_risk,
 
-            # Real Sentinel-1 flood extent risk
             flood_extent_risk=flood_extent.flood_extent_risk,
 
-            # These remain placeholders until their adapters
-            # are implemented.
+            # REAL river proximity risk
             river_proximity_risk=(
-                self.settings.flood_river_proximity_risk
+                river_proximity.river_proximity_risk
             ),
 
+            # Historical flood remains placeholder for now.
             historical_flood_risk=(
                 self.settings.flood_historical_risk
             ),
 
-            # Use Sentinel-1 calculated flooded area.
+            # Sentinel-1 calculated flooded area.
             affected_area_sq_km=(
                 flood_extent.flooded_area_sq_km
             ),
@@ -235,11 +261,26 @@ class RiskOrchestrator:
                         flood_extent.resolution_y
                     ),
                 },
+
+                # -------------------------------------------------
+                # River proximity metadata
+                # -------------------------------------------------
+
+                "river_proximity": {
+                    "source": river_proximity.source,
+                    "dataset": river_proximity.dataset,
+                    "distance_to_river_m": (
+                        river_proximity.distance_to_river_m
+                    ),
+                    "river_proximity_risk": (
+                        river_proximity.river_proximity_risk
+                    ),
+                },
             },
         )
 
         # ---------------------------------------------------------
-        # 5. Calculate flood risk
+        # 6. Calculate deterministic flood risk
         # ---------------------------------------------------------
 
         result = self.flood_engine.calculate(
@@ -247,7 +288,7 @@ class RiskOrchestrator:
         )
 
         # ---------------------------------------------------------
-        # 6. Return orchestrated risk assessment
+        # 7. Return final risk assessment
         # ---------------------------------------------------------
 
         return RiskAssessmentResponse(
@@ -277,7 +318,7 @@ class RiskOrchestrator:
                     "indicator_source": "real_spatial_data",
 
                     # -------------------------------------------------
-                    # Elevation result
+                    # Elevation
                     # -------------------------------------------------
 
                     "elevation": {
@@ -290,7 +331,7 @@ class RiskOrchestrator:
                     },
 
                     # -------------------------------------------------
-                    # Rainfall result
+                    # Rainfall
                     # -------------------------------------------------
 
                     "rainfall": {
@@ -314,7 +355,7 @@ class RiskOrchestrator:
                     },
 
                     # -------------------------------------------------
-                    # Sentinel-1 flood extent result
+                    # Sentinel-1 flood extent
                     # -------------------------------------------------
 
                     "flood_extent": {
@@ -330,6 +371,21 @@ class RiskOrchestrator:
                         "source": flood_extent.source,
                         "dataset": flood_extent.dataset,
                     },
+
+                    # -------------------------------------------------
+                    # River proximity
+                    # -------------------------------------------------
+
+                    "river_proximity": {
+                        "distance_to_river_m": (
+                            river_proximity.distance_to_river_m
+                        ),
+                        "river_proximity_risk": (
+                            river_proximity.river_proximity_risk
+                        ),
+                        "source": river_proximity.source,
+                        "dataset": river_proximity.dataset,
+                    },
                 },
             ),
 
@@ -341,11 +397,11 @@ class RiskOrchestrator:
 
             explanation=(
                 "Flood risk uses real SRTM elevation, "
-                "NASA GPM IMERG rainfall, and Sentinel-1 "
-                "flood extent data. River proximity and "
-                "historical flood indicators remain "
-                "configured placeholders until their "
-                "adapters are connected."
+                "NASA GPM IMERG rainfall, Sentinel-1 "
+                "flood extent, and local HydroSHEDS river "
+                "proximity data. Historical flood indicators "
+                "remain configured placeholders until the "
+                "historical flood adapter is connected."
             ),
         )
 

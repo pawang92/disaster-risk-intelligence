@@ -63,13 +63,18 @@ def test_river_proximity_interpolates_risk(tmp_path: Path) -> None:
     assert 0.0 < result.river_proximity_risk < 1.0
 
 
-def test_river_dataset_requires_crs(tmp_path: Path) -> None:
+def test_river_dataset_requires_crs(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "rivers.geojson"
-    gdf = gpd.GeoDataFrame(
-        {"name": ["Test River"]},
-        geometry=[LineString([(72.87, 19.07), (72.87, 19.08)])],
+    path.write_text("{}")
+
+    class FakeGeoDataFrame:
+        empty = False
+        crs = None
+
+    monkeypatch.setattr(
+        "app.spatial.adapters.river_proximity.gpd.read_file",
+        lambda _: FakeGeoDataFrame(),
     )
-    gdf.to_file(path, driver="GeoJSON")
 
     try:
         RiverProximityAdapter(path)

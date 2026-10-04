@@ -19,9 +19,7 @@ class FloodRiskInput(BaseModel):
     flood_extent_risk: float = Field(default=0.0, ge=0.0, le=1.0)
     river_proximity_risk: float = Field(default=0.0, ge=0.0, le=1.0)
     historical_flood_risk: float = Field(default=0.0, ge=0.0, le=1.0)
-
     affected_area_sq_km: float | None = Field(default=None, ge=0.0)
-
     source_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -46,9 +44,6 @@ class FloodRiskEngine:
 
     methodology_version: str = "flood-v0.1"
 
-    # Initial transparent weights. These are configuration for the prototype,
-    # not a claim of scientific calibration. They must be validated against
-    # authoritative/local flood datasets before operational use.
     elevation_weight: float = 0.20
     rainfall_weight: float = 0.25
     flood_extent_weight: float = 0.25
