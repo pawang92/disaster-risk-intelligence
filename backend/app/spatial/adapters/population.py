@@ -16,6 +16,7 @@ class PopulationExposureResult:
     """Population exposure derived from a flood mask and population raster."""
 
     population_at_risk: float
+    population_in_analysis_area: float
     flooded_area_sq_km: float
     affected_population_percentage: float
     source: str
@@ -39,8 +40,11 @@ class PopulationExposureAdapter:
 
         sum(population_cell * flooded_fraction)
 
-    This avoids duplicating population counts when a ~10 m flood raster
-    is aligned to a ~100 m population raster.
+    The affected population percentage is calculated against the total
+    valid population within the population-grid window covering the flood
+    raster bounds. This denominator is explicitly returned as
+    population_in_analysis_area so consumers do not confuse it with an
+    administrative-area or country-wide population percentage.
     """
 
     def __init__(
@@ -71,15 +75,11 @@ class PopulationExposureAdapter:
         """
         with rasterio.open(self.population_path) as population_src:
             if population_src.crs is None:
-                raise ValueError(
-                    "Population raster does not contain a CRS."
-                )
+                raise ValueError("Population raster does not contain a CRS.")
 
             with rasterio.open(self.flood_mask_path) as flood_src:
                 if flood_src.crs is None:
-                    raise ValueError(
-                        "Flood mask raster does not contain a CRS."
-                    )
+                    raise ValueError("Flood mask raster does not contain a CRS.")
 
                 population_window = self._population_window(
                     population_src,
@@ -137,7 +137,7 @@ class PopulationExposureAdapter:
                     1.0,
                 )
 
-                total_population = float(
+                population_in_analysis_area = float(
                     np.sum(
                         population_values[valid_population],
                         dtype=np.float64,
@@ -146,10 +146,7 @@ class PopulationExposureAdapter:
 
                 population_at_risk = float(
                     np.sum(
-                        (
-                            population_values
-                            * flood_fraction
-                        )[valid_population],
+                        (population_values * flood_fraction)[valid_population],
                         dtype=np.float64,
                     )
                 )
@@ -159,14 +156,20 @@ class PopulationExposureAdapter:
                 )
 
                 percentage = (
-                    population_at_risk / total_population * 100.0
-                    if total_population > 0
+                    population_at_risk
+                    / population_in_analysis_area
+                    * 100.0
+                    if population_in_analysis_area > 0
                     else 0.0
                 )
 
                 return PopulationExposureResult(
                     population_at_risk=round(
                         max(0.0, population_at_risk),
+                        2,
+                    ),
+                    population_in_analysis_area=round(
+                        max(0.0, population_in_analysis_area),
                         2,
                     ),
                     flooded_area_sq_km=round(
@@ -180,12 +183,8 @@ class PopulationExposureAdapter:
                     source="WorldPop + Sentinel-1",
                     population_dataset=self.population_path.name,
                     flood_mask_dataset=self.flood_mask_path.name,
-                    population_resolution_x=float(
-                        population_src.res[0]
-                    ),
-                    population_resolution_y=float(
-                        population_src.res[1]
-                    ),
+                    population_resolution_x=float(population_src.res[0]),
+                    population_resolution_y=float(population_src.res[1]),
                 )
 
     @staticmethod
@@ -224,7 +223,6 @@ class PopulationExposureAdapter:
 
         window = population_src.window(*bounds)
 
-        # Clamp the requested window to the actual population raster.
         full_window = Window(
             col_off=0,
             row_off=0,
@@ -239,11 +237,8 @@ class PopulationExposureAdapter:
     def _calculate_flooded_area_sq_km(
         flood_src: rasterio.io.DatasetReader,
     ) -> float:
-        """
-        Calculate flood area in square kilometres.
+        """Calculate flood area in square kilometres."""
 
-        This mirrors the flood extent adapter's projected-area approach.
-        """
         from rasterio.crs import CRS
         from rasterio.warp import calculate_default_transform
 
@@ -272,16 +267,7 @@ class PopulationExposureAdapter:
             resampling=Resampling.nearest,
         )
 
-        flooded_pixels = int(
-            np.count_nonzero(destination > 0)
-        )
+        flooded_pixels = int(np.count_nonzero(destination > 0))
+        pixel_area_sq_m = abs(transform.a * transform.e)
 
-        pixel_area_sq_m = abs(
-            transform.a * transform.e
-        )
-
-        return (
-            flooded_pixels
-            * pixel_area_sq_m
-            / 1_000_000
-        )
+        return flooded_pixels * pixel_area_sq_m / 1_000_000
