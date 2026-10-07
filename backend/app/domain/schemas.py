@@ -54,6 +54,12 @@ class RiskAssessment(BaseModel):
 class ExposureAssessment(BaseModel):
     properties_at_risk: int | None = Field(default=None, ge=0)
     population_at_risk: int | None = Field(default=None, ge=0)
+    population_in_analysis_area: float | None = Field(default=None, ge=0)
+    affected_population_percentage: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+    )
     roads_at_risk: int | None = Field(default=None, ge=0)
     critical_assets_at_risk: int | None = Field(default=None, ge=0)
     details: dict[str, Any] = Field(default_factory=dict)
