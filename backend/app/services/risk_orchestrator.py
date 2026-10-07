@@ -17,6 +17,7 @@ from app.spatial.adapters.rainfall import RainfallAdapter
 from app.spatial.adapters.flood_extent import FloodExtentAdapter
 from app.spatial.adapters.river_proximity import RiverProximityAdapter
 from app.spatial.adapters.historical_flood import HistoricalFloodAdapter
+from app.spatial.adapters.population import PopulationExposureAdapter
 from app.spatial.engine import SpatialEngine
 
 
@@ -32,6 +33,7 @@ class RiskOrchestrator:
     flood_extent_adapter: FloodExtentAdapter | None = None
     river_proximity_adapter: RiverProximityAdapter | None = None
     historical_flood_adapter: HistoricalFloodAdapter | None = None
+    population_exposure_adapter: PopulationExposureAdapter | None = None
 
     def __post_init__(self) -> None:
         if self.spatial_engine is None:
@@ -110,6 +112,24 @@ class RiskOrchestrator:
                 ),
             )
 
+        if self.population_exposure_adapter is None:
+            population_path = (
+                project_root
+                / "data"
+                / "population"
+                / "ind_pop_2024_UC_100m_R2024A_v1.tif"
+            )
+            flood_extent_path = (
+                project_root
+                / "data"
+                / "flood_extent"
+                / "mumbai_s1_flood_extent.tif"
+            )
+            self.population_exposure_adapter = PopulationExposureAdapter(
+                population_path=population_path,
+                flood_mask_path=flood_extent_path,
+            )
+
     async def assess(
         self,
         request: RiskAssessmentRequest,
@@ -149,6 +169,12 @@ class RiskOrchestrator:
         historical_flood = self.historical_flood_adapter.sample(
             latitude=request.location.latitude,
             longitude=request.location.longitude,
+        )
+
+        population_exposure = (
+            self.population_exposure_adapter.calculate()
+            if request.include_exposure
+            else None
         )
 
         flood_inputs = FloodRiskInput(
@@ -209,10 +235,62 @@ class RiskOrchestrator:
                     "extent_risk": historical_flood.extent_risk,
                     "historical_flood_risk": historical_flood.historical_flood_risk,
                 },
+                "population_exposure": (
+                    {
+                        "source": population_exposure.source,
+                        "population_dataset": population_exposure.population_dataset,
+                        "flood_mask_dataset": population_exposure.flood_mask_dataset,
+                        "population_at_risk": population_exposure.population_at_risk,
+                        "population_in_analysis_area": (
+                            population_exposure.population_in_analysis_area
+                        ),
+                        "affected_population_percentage": (
+                            population_exposure.affected_population_percentage
+                        ),
+                        "flooded_area_sq_km": (
+                            population_exposure.flooded_area_sq_km
+                        ),
+                        "resolution_x": population_exposure.population_resolution_x,
+                        "resolution_y": population_exposure.population_resolution_y,
+                    }
+                    if population_exposure is not None
+                    else None
+                ),
             },
         )
 
         result = self.flood_engine.calculate(flood_inputs)
+
+        exposure = (
+            ExposureAssessment(
+                population_at_risk=round(
+                    population_exposure.population_at_risk
+                ),
+                population_in_analysis_area=(
+                    population_exposure.population_in_analysis_area
+                ),
+                affected_population_percentage=(
+                    population_exposure.affected_population_percentage
+                ),
+                details={
+                    "source": population_exposure.source,
+                    "population_dataset": population_exposure.population_dataset,
+                    "flood_mask_dataset": population_exposure.flood_mask_dataset,
+                    "flooded_area_sq_km": population_exposure.flooded_area_sq_km,
+                    "population_resolution_x": (
+                        population_exposure.population_resolution_x
+                    ),
+                    "population_resolution_y": (
+                        population_exposure.population_resolution_y
+                    ),
+                    "percentage_denominator": (
+                        "population within the flood raster analysis bounding box"
+                    ),
+                },
+            )
+            if population_exposure is not None
+            else None
+        )
 
         return RiskAssessmentResponse(
             request_id=request_id,
@@ -273,17 +351,41 @@ class RiskOrchestrator:
                         "duration_dataset": historical_flood.duration_dataset,
                         "extent_dataset": historical_flood.extent_dataset,
                     },
+                    "population_exposure": (
+                        {
+                            "population_at_risk": (
+                                population_exposure.population_at_risk
+                            ),
+                            "population_in_analysis_area": (
+                                population_exposure.population_in_analysis_area
+                            ),
+                            "affected_population_percentage": (
+                                population_exposure.affected_population_percentage
+                            ),
+                            "source": population_exposure.source,
+                            "population_dataset": (
+                                population_exposure.population_dataset
+                            ),
+                            "flood_mask_dataset": (
+                                population_exposure.flood_mask_dataset
+                            ),
+                        }
+                        if population_exposure is not None
+                        else None
+                    ),
                 },
             ),
-            exposure=ExposureAssessment(),
+            exposure=exposure,
             recommendations=[],
             map_data=spatial.map_data,
             explanation=(
                 "Flood risk uses real SRTM elevation, NASA GPM IMERG rainfall, "
                 "Sentinel-1 flood extent, local HydroSHEDS river proximity, "
-                "and historical flood indicators from local historical flood "
-                "rasters. Exposure analysis, evidence generation, and map "
-                "feature generation remain the next implementation stages."
+                "historical flood indicators, and WorldPop population exposure. "
+                "Population exposure is estimated by area-weighting the flood "
+                "mask onto the WorldPop grid. The affected population percentage "
+                "uses the valid population within the flood raster analysis "
+                "bounding box as its denominator."
             ),
         )
 
