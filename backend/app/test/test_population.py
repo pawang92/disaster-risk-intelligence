@@ -4,9 +4,7 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 
-from app.spatial.adapters.population import (
-    PopulationExposureAdapter,
-)
+from app.spatial.adapters.population import PopulationExposureAdapter
 
 
 def _write_raster(
@@ -42,14 +40,12 @@ def test_population_adapter_calculates_fractional_exposure(
     population = tmp_path / "population.tif"
     flood = tmp_path / "flood.tif"
 
-    # Four population cells, 100 people each.
     _write_raster(
         population,
         np.full((2, 2), 100, dtype=np.float32),
         dtype="float32",
     )
 
-    # Half of each population cell is flooded.
     flood_data = np.array(
         [
             [1, 0],
@@ -71,8 +67,8 @@ def test_population_adapter_calculates_fractional_exposure(
     assert result.source == "WorldPop + Sentinel-1"
     assert result.population_dataset == "population.tif"
     assert result.flood_mask_dataset == "flood.tif"
+    assert result.population_in_analysis_area == 400.0
 
-    # With identical grids, two of four cells are fully flooded.
     assert result.population_at_risk == 200.0
     assert 0.0 < result.flooded_area_sq_km
     assert result.affected_population_percentage == 50.0
@@ -111,6 +107,7 @@ def test_population_adapter_handles_nodata(
     ).calculate()
 
     assert result.population_at_risk == 300.0
+    assert result.population_in_analysis_area == 300.0
     assert result.affected_population_percentage == 100.0
 
 
