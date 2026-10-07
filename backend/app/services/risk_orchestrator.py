@@ -223,6 +223,7 @@ class RiskOrchestrator:
                 risk_score=result.risk_score,
                 affected_area_sq_km=result.affected_area_sq_km,
                 methodology_version=result.methodology_version,
+                contributing_factors=result.contributing_factors,
                 inputs={
                     "hazard_score": result.hazard_score,
                     "contributing_factors": result.contributing_factors,

@@ -15,7 +15,6 @@ class HazardType(str, Enum):
 
 class LocationInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
     village: str | None = Field(default=None, min_length=1, max_length=200)
     district: str | None = Field(default=None, min_length=1, max_length=200)
     state: str | None = Field(default=None, min_length=1, max_length=200)
@@ -48,6 +47,7 @@ class RiskAssessment(BaseModel):
     risk_score: float | None = Field(default=None, ge=0, le=1)
     affected_area_sq_km: float | None = Field(default=None, ge=0)
     methodology_version: str | None = None
+    contributing_factors: list[str] = Field(default_factory=list)
     inputs: dict[str, Any] = Field(default_factory=dict)
 
 
