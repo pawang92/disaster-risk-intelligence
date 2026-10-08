@@ -1,18 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+import re
+from typing import Any
 
-import geopandas as gpd
-import rasterio
-from rasterio.features import shapes
-from shapely.geometry import shape
-from shapely.ops import unary_union
+import psycopg2
+from psycopg2 import sql
 
 
 @dataclass(frozen=True, slots=True)
 class BuildingExposureResult:
-    """Building exposure derived from building footprints and a flood mask."""
+    """Building exposure calculated from authoritative PostGIS layers."""
 
     buildings_at_risk: int
     total_buildings_in_analysis_area: int
@@ -24,159 +22,172 @@ class BuildingExposureResult:
 
 class BuildingExposureAdapter:
     """
-    Estimate building exposure to a flood extent.
+    Calculate flood-exposed buildings from PostGIS.
 
-    Building footprints are intersected with polygons generated from the
-    binary/continuous flood raster. A building is considered affected when
-    its footprint has a non-zero geometric intersection with the flood area.
-
-    The analysis area is the flood raster bounding box. This makes the
-    percentage denominator explicit and avoids presenting a bounding-box
-    percentage as an administrative-area statistic.
+    Building footprints and the derived Sentinel-1 flood extent are stored in
+    PostGIS. A building is considered affected when its footprint intersects
+    the flood geometry. The analysis-area denominator is the flood extent's
+    bounding box, matching the project's validated exposure definition.
     """
+
+    _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
     def __init__(
         self,
-        building_path: str | Path,
-        flood_mask_path: str | Path,
+        database_url: str,
         *,
-        metric_crs: str = "EPSG:6933",
+        building_table: str = "mumbai_building_footprints",
+        flood_table: str = "mumbai_s1_flood_extent",
+        source: str = "Google Open Buildings V3 + Sentinel-1",
+        connect_timeout_seconds: int = 10,
     ) -> None:
-        self.building_path = Path(building_path)
-        self.flood_mask_path = Path(flood_mask_path)
-        self.metric_crs = metric_crs
+        if not database_url or not database_url.strip():
+            raise ValueError("database_url is required.")
 
-        if not self.building_path.exists():
-            raise FileNotFoundError(
-                f"Building dataset not found: {self.building_path}"
-            )
+        if connect_timeout_seconds <= 0:
+            raise ValueError("connect_timeout_seconds must be greater than zero.")
 
-        if not self.flood_mask_path.exists():
-            raise FileNotFoundError(
-                f"Flood mask raster not found: {self.flood_mask_path}"
-            )
+        self.database_url = self._normalize_database_url(database_url)
+        self.building_table = self._validate_identifier(
+            building_table,
+            "building_table",
+        )
+        self.flood_table = self._validate_identifier(
+            flood_table,
+            "flood_table",
+        )
+        self.source = source
+        self.connect_timeout_seconds = int(connect_timeout_seconds)
 
     def calculate(self) -> BuildingExposureResult:
-        """Calculate building footprints intersecting the flood extent."""
+        """Calculate building exposure using a PostGIS spatial intersection."""
 
-        buildings = gpd.read_file(self.building_path)
+        query = sql.SQL(
+            """
+            WITH flood_analysis_area AS (
+                SELECT
+                    ST_Envelope(ST_UnaryUnion(f.geom)) AS geom
+                FROM {flood_table} AS f
+            ),
+            metrics AS (
+                SELECT
+                    COUNT(*) AS total_buildings_in_analysis_area,
+                    COUNT(*) FILTER (
+                        WHERE EXISTS (
+                            SELECT 1
+                            FROM {flood_table} AS f
+                            WHERE ST_Intersects(b.geom, f.geom)
+                        )
+                    ) AS buildings_at_risk
+                FROM {building_table} AS b
+                CROSS JOIN flood_analysis_area AS a
+                WHERE a.geom IS NOT NULL
+                  AND ST_Intersects(b.geom, a.geom)
+            )
+            SELECT
+                total_buildings_in_analysis_area,
+                buildings_at_risk,
+                CASE
+                    WHEN total_buildings_in_analysis_area > 0
+                    THEN ROUND(
+                        (
+                            buildings_at_risk::numeric
+                            / total_buildings_in_analysis_area::numeric
+                        ) * 100,
+                        4
+                    )
+                    ELSE 0
+                END AS affected_building_percentage
+            FROM metrics;
+            """
+        ).format(
+            building_table=sql.Identifier(self.building_table),
+            flood_table=sql.Identifier(self.flood_table),
+        )
 
-        if buildings.empty:
-            raise ValueError("Building dataset contains no features.")
+        try:
+            with psycopg2.connect(
+                self.database_url,
+                connect_timeout=self.connect_timeout_seconds,
+            ) as connection:
+                with connection.cursor() as cursor:
+                    self._validate_spatial_reference_system(
+                        cursor,
+                    )
+                    cursor.execute(query)
+                    row = cursor.fetchone()
+        except psycopg2.Error as exc:
+            raise RuntimeError(
+                "Failed to calculate building exposure from PostGIS "
+                f"({self.building_table} + {self.flood_table})."
+            ) from exc
 
-        if buildings.crs is None:
-            raise ValueError("Building dataset does not contain a CRS.")
+        if row is None:
+            raise RuntimeError("PostGIS building exposure query returned no result.")
 
-        buildings = buildings.loc[buildings.geometry.notna()].copy()
-        buildings = buildings.loc[~buildings.geometry.is_empty].copy()
+        total_buildings, buildings_at_risk, percentage = row
 
-        if buildings.empty:
-            raise ValueError("Building dataset contains no valid geometries.")
+        return BuildingExposureResult(
+            buildings_at_risk=int(buildings_at_risk or 0),
+            total_buildings_in_analysis_area=int(total_buildings or 0),
+            affected_building_percentage=float(percentage or 0.0),
+            source=self.source,
+            building_dataset=self.building_table,
+            flood_mask_dataset=self.flood_table,
+        )
 
-        with rasterio.open(self.flood_mask_path) as flood_src:
-            if flood_src.crs is None:
-                raise ValueError("Flood mask raster does not contain a CRS.")
+    def _validate_spatial_reference_system(self, cursor: Any) -> None:
+        """Fail fast when building and flood layers use different SRIDs."""
 
-            flood_geometry = self._flood_geometry(flood_src)
+        query = sql.SQL(
+            """
+            SELECT
+                (SELECT ST_SRID(geom) FROM {building_table} WHERE geom IS NOT NULL LIMIT 1),
+                (SELECT ST_SRID(geom) FROM {flood_table} WHERE geom IS NOT NULL LIMIT 1);
+            """
+        ).format(
+            building_table=sql.Identifier(self.building_table),
+            flood_table=sql.Identifier(self.flood_table),
+        )
 
-            if flood_geometry is None or flood_geometry.is_empty:
-                return BuildingExposureResult(
-                    buildings_at_risk=0,
-                    total_buildings_in_analysis_area=0,
-                    affected_building_percentage=0.0,
-                    source="Building footprints + Sentinel-1",
-                    building_dataset=self.building_path.name,
-                    flood_mask_dataset=self.flood_mask_path.name,
-                )
+        cursor.execute(query)
+        building_srid, flood_srid = cursor.fetchone()
 
-            buildings = buildings.to_crs(flood_src.crs)
-
-            flood_bounds = flood_geometry.bounds
-            candidates = buildings.cx[
-                flood_bounds[0] : flood_bounds[2],
-                flood_bounds[1] : flood_bounds[3],
-            ].copy()
-
-            if candidates.empty:
-                return BuildingExposureResult(
-                    buildings_at_risk=0,
-                    total_buildings_in_analysis_area=0,
-                    affected_building_percentage=0.0,
-                    source="Building footprints + Sentinel-1",
-                    building_dataset=self.building_path.name,
-                    flood_mask_dataset=self.flood_mask_path.name,
-                )
-
-            # A building is in the analysis area if its footprint intersects
-            # the flood bounding box, not merely if its centroid is inside it.
-            analysis_bbox = gpd.GeoSeries(
-                [shape({
-                    "type": "Polygon",
-                    "coordinates": [[
-                        [flood_bounds[0], flood_bounds[1]],
-                        [flood_bounds[2], flood_bounds[1]],
-                        [flood_bounds[2], flood_bounds[3]],
-                        [flood_bounds[0], flood_bounds[3]],
-                        [flood_bounds[0], flood_bounds[1]],
-                    ]],
-                })],
-                crs=flood_src.crs,
-            ).iloc[0]
-
-            analysis_candidates = candidates[
-                candidates.geometry.intersects(analysis_bbox)
-            ]
-
-            total_buildings = int(len(analysis_candidates))
-
-            affected = analysis_candidates[
-                analysis_candidates.geometry.intersects(flood_geometry)
-            ]
-
-            buildings_at_risk = int(len(affected))
-
-            percentage = (
-                buildings_at_risk / total_buildings * 100.0
-                if total_buildings > 0
-                else 0.0
+        if building_srid is None:
+            raise ValueError(
+                f"Building table '{self.building_table}' contains no valid geometry."
             )
 
-            return BuildingExposureResult(
-                buildings_at_risk=buildings_at_risk,
-                total_buildings_in_analysis_area=total_buildings,
-                affected_building_percentage=round(
-                    max(0.0, min(100.0, percentage)),
-                    2,
-                ),
-                source="Building footprints + Sentinel-1",
-                building_dataset=self.building_path.name,
-                flood_mask_dataset=self.flood_mask_path.name,
+        if flood_srid is None:
+            raise ValueError(
+                f"Flood table '{self.flood_table}' contains no valid geometry."
+            )
+
+        if int(building_srid) != int(flood_srid):
+            raise ValueError(
+                "Building and flood layers must use the same CRS/SRID: "
+                f"building={building_srid}, flood={flood_srid}."
             )
 
     @staticmethod
-    def _flood_geometry(
-        flood_src: rasterio.io.DatasetReader,
-    ):
-        """Convert positive flood-mask pixels into a dissolved geometry."""
-
-        mask = flood_src.read(1, masked=True)
-
-        valid = (~mask.mask) & (mask.filled(0) > 0)
-
-        if not valid.any():
-            return None
-
-        geometries = [
-            shape(geometry)
-            for geometry, value in shapes(
-                mask.filled(0).astype("uint8"),
-                mask=valid,
-                transform=flood_src.transform,
+    def _validate_identifier(value: str, field_name: str) -> str:
+        if not value or not BuildingExposureAdapter._IDENTIFIER_RE.fullmatch(value):
+            raise ValueError(
+                f"{field_name} must be a simple PostgreSQL identifier: {value!r}"
             )
-            if value > 0
-        ]
+        return value
 
-        if not geometries:
-            return None
+    @staticmethod
+    def _normalize_database_url(database_url: str) -> str:
+        """Normalize SQLAlchemy-style PostgreSQL URLs for psycopg2."""
 
-        return unary_union(geometries)
+        normalized = database_url.strip()
+
+        for prefix in (
+            "postgresql+psycopg2://",
+            "postgresql+psycopg://",
+        ):
+            if normalized.startswith(prefix):
+                return "postgresql://" + normalized[len(prefix):]
+
+        return normalized
