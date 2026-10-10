@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 
 from app.spatial.adapters import road as road_module
-from app.spatial.adapters.road import RoadPostGISExposureAdapter
+from app.spatial.adapters.road import RoadExposureResult, RoadPostGISExposureAdapter
+from app.services.risk_orchestrator import RiskOrchestrator
 
 
 class FakeCursor:
@@ -71,3 +72,33 @@ def test_calculates_road_exposure(monkeypatch):
     assert result.affected_by_class == {"primary": 4, "residential": 6}
     assert result.totals_by_class == {"primary": 100, "residential": 200, "service": 20}
     assert connection.fake_cursor.execute_count == 2
+
+
+def test_road_metrics_are_added_to_exposure_response():
+    result = RoadExposureResult(
+        roads_at_risk=7,
+        total_road_features_in_analysis_area=140,
+        affected_road_percentage=5.0,
+        affected_by_class={"primary": 3, "residential": 4},
+        totals_by_class={"primary": 20, "residential": 120},
+        source="test road data + flood extent",
+        road_dataset="mumbai_suburban_roads",
+        flood_dataset="mumbai_s1_flood_extent",
+    )
+
+    exposure = RiskOrchestrator._exposure_assessment(
+        population_exposure=None,
+        building_exposure=None,
+        railway_exposure=None,
+        critical_infrastructure_exposure=None,
+        road_exposure=result,
+    )
+
+    assert exposure is not None
+    assert exposure.roads_at_risk == 7
+    assert exposure.details["roads_at_risk"] == 7
+    assert exposure.details["affected_road_percentage"] == 5.0
+    assert exposure.details["roads_at_risk_by_class"] == {
+        "primary": 3,
+        "residential": 4,
+    }
