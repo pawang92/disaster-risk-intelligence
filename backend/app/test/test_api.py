@@ -22,10 +22,6 @@ def test_health() -> None:
 
 
 def test_risk_assessment_requires_coordinates() -> None:
-    # This contract test must not depend on ROAD_EXPOSURE_ENABLED in a developer's
-    # local .env or on the optional road table existing in their database.
-    monkeypatch.setattr(get_risk_orchestrator(), "road_exposure_adapter", None)
-
     response = client.post(
         "/api/v1/risk/assess",
         json={
@@ -44,6 +40,9 @@ def test_risk_assessment_requires_coordinates() -> None:
 
 def test_risk_assessment_contract(monkeypatch) -> None:
     # Keep this API contract test independent of local PostgreSQL credentials.
+    # Ignore optional road exposure configuration in a developer's .env.
+    # Road exposure has separate adapter tests and is disabled for this API contract.
+    monkeypatch.setattr(get_risk_orchestrator(), "road_exposure_adapter", None)
     monkeypatch.setattr(
         BuildingPostGISExposureAdapter,
         "calculate",
