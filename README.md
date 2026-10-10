@@ -91,3 +91,30 @@ For native RAG development, see docs/local-development.md.
 12. AWS deployment
 
 Each phase is inspected, implemented, tested and documented before the next phase begins.
+
+
+## Flood exposure analysis
+
+The `POST /api/v1/risk/assess` response includes exposure metrics calculated against the configured mapped flood extent:
+
+- `exposure.critical_assets_at_risk`: critical OpenStreetMap POIs intersecting the flood geometry.
+- `risk_assessment.inputs.critical_infrastructure_exposure`: overall and per-category counts and percentages for configured POI classes.
+- `exposure.roads_at_risk` and `risk_assessment.inputs.road_exposure`: road-segment exposure when a roads table is configured and enabled.
+- Building and railway exposure remain available through the same response.
+
+The denominator for POI and road percentages is the configured feature count inside the flood geometry's bounding box. A feature is counted as affected only if it intersects the flood geometry itself. These are mapped feature-exposure metrics; they do not prove that a facility is operational or that a road is impassable.
+
+### Critical infrastructure
+
+The default PostGIS source is `mumbai_suburban_poi`, with `fclass` and `geom` columns, alongside `mumbai_s1_flood_extent`. The adapter filters to hospitals, clinics, doctors, pharmacies, schools, universities, fire stations, police stations, shelters, nursing homes and selected community facilities. It uses the existing `critical_assets_at_risk` API field and provides category details under `exposure.details`.
+
+### Road exposure
+
+Road analysis is implemented but disabled by default because the current local database inventory does not include a roads table. After importing road segments with `fclass` and `geom` columns in the same SRID as the flood layer, configure:
+
+```env
+ROAD_EXPOSURE_ENABLED=true
+ROAD_EXPOSURE_TABLE=mumbai_suburban_roads
+```
+
+The table name can be changed with `ROAD_EXPOSURE_TABLE`. Keep road exposure disabled until the configured table exists and has valid geometry. Road metrics count intersecting road features, not kilometers of road affected.
