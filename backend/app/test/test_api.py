@@ -5,6 +5,10 @@ from app.spatial.adapters.building import (
     BuildingExposureResult,
     BuildingPostGISExposureAdapter,
 )
+from app.spatial.adapters.critical_infrastructure import (
+    CriticalInfrastructureExposureResult,
+    CriticalInfrastructurePostGISExposureAdapter,
+)
 
 client = TestClient(app)
 
@@ -45,6 +49,26 @@ def test_risk_assessment_contract(monkeypatch) -> None:
             source="PostGIS building footprints + Sentinel-1 flood extent",
             building_dataset=self.building_table,
             flood_mask_dataset=self.flood_table,
+        ),
+    )
+
+    monkeypatch.setattr(
+        CriticalInfrastructurePostGISExposureAdapter,
+        "calculate",
+        lambda self: CriticalInfrastructureExposureResult(
+            critical_assets_at_risk=3,
+            total_critical_assets_in_analysis_area=30,
+            affected_critical_asset_percentage=10.0,
+            affected_by_category={"hospital": 2, "pharmacy": 1},
+            totals_by_category={"hospital": 10, "pharmacy": 5, "school": 15},
+            affected_percentage_by_category={
+                "hospital": 20.0,
+                "pharmacy": 20.0,
+                "school": 0.0,
+            },
+            source="test POIs + flood extent",
+            poi_dataset=self.poi_table,
+            flood_dataset=self.flood_table,
         ),
     )
 
@@ -114,6 +138,15 @@ def test_risk_assessment_contract(monkeypatch) -> None:
     assert historical_flood["source"] == "local_historical_flood_rasters"
 
     assert "building_exposure" in inputs
+    critical = inputs["critical_infrastructure_exposure"]
+    assert critical["critical_assets_at_risk"] == 3
+    assert critical["affected_by_category"] == {"hospital": 2, "pharmacy": 1}
+    assert body["exposure"]["critical_assets_at_risk"] == 3
+    assert body["exposure"]["details"]["critical_assets_at_risk_by_category"] == {
+        "hospital": 2,
+        "pharmacy": 1,
+    }
+    assert body["exposure"]["roads_at_risk"] is None
     assert "historical_flood" in risk_assessment["contributing_factors"] or (
         historical_flood["historical_flood_risk"] < 0.50
     )
