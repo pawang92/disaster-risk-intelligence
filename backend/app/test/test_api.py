@@ -1,0 +1,103 @@
+from fastapi.testclient import TestClient
+
+from app.main import app
+
+client = TestClient(app)
+
+
+def test_health() -> None:
+    response = client.get("/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+
+
+def test_risk_assessment_requires_coordinates() -> None:
+    response = client.post(
+        "/api/v1/risk/assess",
+        json={
+            "location": {
+                "village": "Test Village",
+                "district": "Mumbai",
+                "state": "Maharashtra",
+            },
+            "hazard": "flood",
+            "question": "What is the flood risk?",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_risk_assessment_contract() -> None:
+    response = client.post(
+        "/api/v1/risk/assess",
+        json={
+            "location": {
+                "village": "Test Village",
+                "district": "Mumbai",
+                "state": "Maharashtra",
+                "latitude": 19.076,
+                "longitude": 72.8777,
+            },
+            "hazard": "flood",
+            "question": "What is the flood risk?",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+
+    assert "request_id" in body
+    assert body["hazard"] == "flood"
+
+    risk_assessment = body["risk_assessment"]
+
+    assert risk_assessment["risk_level"] in {
+        "low",
+        "moderate",
+        "high",
+        "very_high",
+    }
+
+    assert 0.0 <= risk_assessment["risk_score"] <= 1.0
+    assert risk_assessment["methodology_version"] == "flood-v0.1"
+
+    inputs = risk_assessment["inputs"]
+    assert inputs["indicator_source"] == "real_spatial_data"
+
+    elevation = inputs["elevation"]
+    assert "elevation_m" in elevation
+    assert "elevation_risk" in elevation
+    assert isinstance(elevation["elevation_m"], (int, float))
+    assert 0.0 <= elevation["elevation_risk"] <= 1.0
+
+    rainfall = inputs["rainfall"]
+    assert 0.0 <= rainfall["rainfall_risk"] <= 1.0
+
+    flood_extent = inputs["flood_extent"]
+    assert 0.0 <= flood_extent["flood_extent_risk"] <= 1.0
+    assert flood_extent["flooded_area_sq_km"] is not None
+    assert flood_extent["source"] == "Sentinel-1"
+
+    river_proximity = inputs["river_proximity"]
+    assert river_proximity["distance_to_river_m"] >= 0.0
+    assert 0.0 <= river_proximity["river_proximity_risk"] <= 1.0
+    assert river_proximity["source"] == "local_river_vector"
+
+    historical_flood = inputs["historical_flood"]
+    assert historical_flood["flood_frequency"] >= 0.0
+    assert historical_flood["maximum_flood_duration_days"] >= 0.0
+    assert 0.0 <= historical_flood["frequency_risk"] <= 1.0
+    assert 0.0 <= historical_flood["presence_risk"] <= 1.0
+    assert 0.0 <= historical_flood["duration_risk"] <= 1.0
+    assert 0.0 <= historical_flood["extent_risk"] <= 1.0
+    assert 0.0 <= historical_flood["historical_flood_risk"] <= 1.0
+    assert historical_flood["source"] == "local_historical_flood_rasters"
+
+    assert "building_exposure" in inputs
+    assert "historical_flood" in risk_assessment["contributing_factors"] or (
+        historical_flood["historical_flood_risk"] < 0.50
+    )
+    assert body["recommendations"]
+    assert body["map_data"]["features"]
