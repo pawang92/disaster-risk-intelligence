@@ -516,8 +516,13 @@ class RiskOrchestrator:
     def _exposure_assessment(
         population_exposure,
         building_exposure,
+        railway_exposure=None,
     ) -> ExposureAssessment | None:
-        if population_exposure is None and building_exposure is None:
+        if (
+            population_exposure is None
+            and building_exposure is None
+            and railway_exposure is None
+        ):
             return None
 
         details: dict[str, object] = {}
@@ -555,6 +560,26 @@ class RiskOrchestrator:
                     ),
                     "building_percentage_denominator": (
                         "buildings intersecting the mapped flood extent bounding box"
+                    ),
+                }
+            )
+
+        if railway_exposure is not None:
+            details.update(
+                {
+                    "railway_source": railway_exposure.source,
+                    "railway_dataset": railway_exposure.railway_dataset,
+                    "railway_flood_dataset": railway_exposure.flood_dataset,
+                    "railways_at_risk": railway_exposure.railways_at_risk,
+                    "total_railway_features_in_analysis_area": (
+                        railway_exposure.total_railway_features_in_analysis_area
+                    ),
+                    "affected_railway_percentage": (
+                        railway_exposure.affected_railway_percentage
+                    ),
+                    "railways_at_risk_by_class": railway_exposure.affected_by_class,
+                    "railway_percentage_denominator": (
+                        "railway line features intersecting the mapped flood extent bounding box"
                     ),
                 }
             )
