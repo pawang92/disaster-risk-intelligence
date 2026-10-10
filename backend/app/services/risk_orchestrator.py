@@ -14,7 +14,10 @@ from app.domain.schemas import (
     RiskAssessmentResponse,
 )
 from app.risk.flood import FloodRiskEngine, FloodRiskInput
-from app.spatial.adapters.building import BuildingExposureAdapter
+from app.spatial.adapters.building import (
+    BuildingExposureAdapter,
+    BuildingPostGISExposureAdapter,
+)
 from app.spatial.adapters.elevation import ElevationAdapter
 from app.spatial.adapters.rainfall import RainfallAdapter
 from app.spatial.adapters.flood_extent import FloodExtentAdapter
@@ -37,7 +40,9 @@ class RiskOrchestrator:
     river_proximity_adapter: RiverProximityAdapter | None = None
     historical_flood_adapter: HistoricalFloodAdapter | None = None
     population_exposure_adapter: PopulationExposureAdapter | None = None
-    building_exposure_adapter: BuildingExposureAdapter | None = None
+    building_exposure_adapter: (
+        BuildingExposureAdapter | BuildingPostGISExposureAdapter | None
+    ) = None
 
     def __post_init__(self) -> None:
         if self.spatial_engine is None:
@@ -135,22 +140,34 @@ class RiskOrchestrator:
             )
 
         if self.building_exposure_adapter is None:
-            building_path = (
-                project_root
-                / "data"
-                / "buildings"
-                / "mumbai_building_footprints.geojson"
-            )
-            flood_extent_path = (
-                project_root
-                / "data"
-                / "flood_extent"
-                / "mumbai_s1_flood_extent.tif"
-            )
-            if building_path.exists() and flood_extent_path.exists():
-                self.building_exposure_adapter = BuildingExposureAdapter(
-                    building_path=building_path,
-                    flood_mask_path=flood_extent_path,
+            backend = self.settings.building_exposure_backend
+            if backend == "postgis":
+                self.building_exposure_adapter = BuildingPostGISExposureAdapter(
+                    database_url=self.settings.postgis_url,
+                    building_table="mumbai_building_footprints",
+                    flood_table="mumbai_s1_flood_extent",
+                )
+            elif backend == "file":
+                building_path = (
+                    project_root
+                    / "data"
+                    / "buildings"
+                    / "mumbai_building_footprints.geojson"
+                )
+                flood_extent_path = (
+                    project_root
+                    / "data"
+                    / "flood_extent"
+                    / "mumbai_s1_flood_extent.tif"
+                )
+                if building_path.exists() and flood_extent_path.exists():
+                    self.building_exposure_adapter = BuildingExposureAdapter(
+                        building_path=building_path,
+                        flood_mask_path=flood_extent_path,
+                    )
+            elif backend != "disabled":
+                raise ValueError(
+                    "building_exposure_backend must be 'postgis', 'file', or 'disabled'."
                 )
 
     async def assess(
@@ -430,7 +447,10 @@ class RiskOrchestrator:
                 "Population exposure is estimated by area-weighting the flood "
                 "mask onto the WorldPop grid. The affected population percentage "
                 "uses the valid population within the flood raster analysis "
-                "bounding box as its denominator."
+                "bounding box as its denominator. Building exposure is calculated "
+                "from the configured source (PostGIS by default) against the mapped "
+                "flood extent; its denominator is buildings within the flood extent "
+                "bounding box, not a user-selected radius."
             ),
         )
 
@@ -503,7 +523,7 @@ class RiskOrchestrator:
                         building_exposure.affected_building_percentage
                     ),
                     "building_percentage_denominator": (
-                        "buildings intersecting the flood raster bounding box"
+                        "buildings intersecting the mapped flood extent bounding box"
                     ),
                 }
             )
