@@ -22,7 +22,9 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     allowed_origins: str = "http://localhost:3000,http://localhost:5173"
 
-    postgis_url: str = "postgresql+psycopg://disaster:disaster@localhost:5432/disaster"
+    postgis_url: str = (
+        "postgresql+psycopg://disaster:disaster@localhost:5432/disaster_risk"
+    )
     redis_url: str = "redis://localhost:6379/0"
 
     default_hazard: str = "flood"

@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.domain.schemas import (
     ExposureAssessment,
+    Recommendation,
     RiskAssessment,
     RiskAssessmentRequest,
     RiskAssessmentResponse,
 )
 from app.risk.flood import FloodRiskEngine, FloodRiskInput
+from app.spatial.adapters.building import BuildingExposureAdapter
 from app.spatial.adapters.elevation import ElevationAdapter
 from app.spatial.adapters.rainfall import RainfallAdapter
 from app.spatial.adapters.flood_extent import FloodExtentAdapter
@@ -34,6 +37,7 @@ class RiskOrchestrator:
     river_proximity_adapter: RiverProximityAdapter | None = None
     historical_flood_adapter: HistoricalFloodAdapter | None = None
     population_exposure_adapter: PopulationExposureAdapter | None = None
+    building_exposure_adapter: BuildingExposureAdapter | None = None
 
     def __post_init__(self) -> None:
         if self.spatial_engine is None:
@@ -130,6 +134,25 @@ class RiskOrchestrator:
                 flood_mask_path=flood_extent_path,
             )
 
+        if self.building_exposure_adapter is None:
+            building_path = (
+                project_root
+                / "data"
+                / "buildings"
+                / "mumbai_building_footprints.geojson"
+            )
+            flood_extent_path = (
+                project_root
+                / "data"
+                / "flood_extent"
+                / "mumbai_s1_flood_extent.tif"
+            )
+            if building_path.exists() and flood_extent_path.exists():
+                self.building_exposure_adapter = BuildingExposureAdapter(
+                    building_path=building_path,
+                    flood_mask_path=flood_extent_path,
+                )
+
     async def assess(
         self,
         request: RiskAssessmentRequest,
@@ -174,6 +197,12 @@ class RiskOrchestrator:
         population_exposure = (
             self.population_exposure_adapter.calculate()
             if request.include_exposure
+            else None
+        )
+
+        building_exposure = (
+            self.building_exposure_adapter.calculate()
+            if request.include_exposure and self.building_exposure_adapter is not None
             else None
         )
 
@@ -256,40 +285,30 @@ class RiskOrchestrator:
                     if population_exposure is not None
                     else None
                 ),
+                "building_exposure": (
+                    {
+                        "source": building_exposure.source,
+                        "building_dataset": building_exposure.building_dataset,
+                        "flood_mask_dataset": building_exposure.flood_mask_dataset,
+                        "buildings_at_risk": building_exposure.buildings_at_risk,
+                        "total_buildings_in_analysis_area": (
+                            building_exposure.total_buildings_in_analysis_area
+                        ),
+                        "affected_building_percentage": (
+                            building_exposure.affected_building_percentage
+                        ),
+                    }
+                    if building_exposure is not None
+                    else None
+                ),
             },
         )
 
         result = self.flood_engine.calculate(flood_inputs)
 
-        exposure = (
-            ExposureAssessment(
-                population_at_risk=round(
-                    population_exposure.population_at_risk
-                ),
-                population_in_analysis_area=(
-                    population_exposure.population_in_analysis_area
-                ),
-                affected_population_percentage=(
-                    population_exposure.affected_population_percentage
-                ),
-                details={
-                    "source": population_exposure.source,
-                    "population_dataset": population_exposure.population_dataset,
-                    "flood_mask_dataset": population_exposure.flood_mask_dataset,
-                    "flooded_area_sq_km": population_exposure.flooded_area_sq_km,
-                    "population_resolution_x": (
-                        population_exposure.population_resolution_x
-                    ),
-                    "population_resolution_y": (
-                        population_exposure.population_resolution_y
-                    ),
-                    "percentage_denominator": (
-                        "population within the flood raster analysis bounding box"
-                    ),
-                },
-            )
-            if population_exposure is not None
-            else None
+        exposure = self._exposure_assessment(
+            population_exposure,
+            building_exposure,
         )
 
         return RiskAssessmentResponse(
@@ -373,10 +392,36 @@ class RiskOrchestrator:
                         if population_exposure is not None
                         else None
                     ),
+                    "building_exposure": (
+                        {
+                            "buildings_at_risk": (
+                                building_exposure.buildings_at_risk
+                            ),
+                            "total_buildings_in_analysis_area": (
+                                building_exposure.total_buildings_in_analysis_area
+                            ),
+                            "affected_building_percentage": (
+                                building_exposure.affected_building_percentage
+                            ),
+                            "source": building_exposure.source,
+                            "building_dataset": (
+                                building_exposure.building_dataset
+                            ),
+                            "flood_mask_dataset": (
+                                building_exposure.flood_mask_dataset
+                            ),
+                        }
+                        if building_exposure is not None
+                        else None
+                    ),
                 },
             ),
             exposure=exposure,
-            recommendations=[],
+            recommendations=(
+                self._recommendations(result.risk_level)
+                if request.include_recommendations
+                else []
+            ),
             map_data=spatial.map_data,
             explanation=(
                 "Flood risk uses real SRTM elevation, NASA GPM IMERG rainfall, "
@@ -415,3 +460,113 @@ class RiskOrchestrator:
                 f"The {request.hazard.value} risk engine is not implemented yet."
             ),
         )
+
+    @staticmethod
+    def _exposure_assessment(
+        population_exposure,
+        building_exposure,
+    ) -> ExposureAssessment | None:
+        if population_exposure is None and building_exposure is None:
+            return None
+
+        details: dict[str, object] = {}
+        if population_exposure is not None:
+            details.update(
+                {
+                    "source": population_exposure.source,
+                    "population_dataset": population_exposure.population_dataset,
+                    "flood_mask_dataset": population_exposure.flood_mask_dataset,
+                    "flooded_area_sq_km": population_exposure.flooded_area_sq_km,
+                    "population_resolution_x": (
+                        population_exposure.population_resolution_x
+                    ),
+                    "population_resolution_y": (
+                        population_exposure.population_resolution_y
+                    ),
+                    "percentage_denominator": (
+                        "population within the flood raster analysis bounding box"
+                    ),
+                }
+            )
+        if building_exposure is not None:
+            details.update(
+                {
+                    "building_source": building_exposure.source,
+                    "building_dataset": building_exposure.building_dataset,
+                    "building_flood_mask_dataset": (
+                        building_exposure.flood_mask_dataset
+                    ),
+                    "total_buildings_in_analysis_area": (
+                        building_exposure.total_buildings_in_analysis_area
+                    ),
+                    "affected_building_percentage": (
+                        building_exposure.affected_building_percentage
+                    ),
+                    "building_percentage_denominator": (
+                        "buildings intersecting the flood raster bounding box"
+                    ),
+                }
+            )
+
+        return ExposureAssessment(
+            properties_at_risk=(
+                building_exposure.buildings_at_risk
+                if building_exposure is not None
+                else None
+            ),
+            population_at_risk=(
+                round(population_exposure.population_at_risk)
+                if population_exposure is not None
+                else None
+            ),
+            population_in_analysis_area=(
+                population_exposure.population_in_analysis_area
+                if population_exposure is not None
+                else None
+            ),
+            affected_population_percentage=(
+                population_exposure.affected_population_percentage
+                if population_exposure is not None
+                else None
+            ),
+            details=details,
+        )
+
+    @staticmethod
+    def _recommendations(risk_level: str) -> list[Recommendation]:
+        if risk_level == "very_high":
+            return [
+                Recommendation(
+                    action="Move people and assets out of flooded or low-lying areas.",
+                    priority="high",
+                    rationale="Multiple flood indicators are at very high levels.",
+                )
+            ]
+        if risk_level == "high":
+            return [
+                Recommendation(
+                    action="Prepare evacuation routes and protect critical assets.",
+                    priority="high",
+                    rationale="Flood hazard indicators are high at this location.",
+                )
+            ]
+        if risk_level == "moderate":
+            return [
+                Recommendation(
+                    action="Monitor rainfall and river conditions and review local guidance.",
+                    priority="medium",
+                    rationale="Flood indicators are elevated but not at the highest band.",
+                )
+            ]
+        return [
+            Recommendation(
+                action="Stay informed and maintain basic flood preparedness.",
+                priority="low",
+                rationale="Current flood indicators are in the low band.",
+            )
+        ]
+
+
+@lru_cache(maxsize=1)
+def get_risk_orchestrator() -> RiskOrchestrator:
+    return RiskOrchestrator(get_settings())

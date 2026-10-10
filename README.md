@@ -16,7 +16,7 @@ React Dashboard (planned)
 +-------+----------------+
 |       |                |
 Risk   RAG          AI Gateway
-planned current       current
+current current       current
         |
    Local E5 + Chroma
         |
@@ -38,7 +38,7 @@ Grok and Gemini are optional external providers behind the LLM layer. Ollama is 
 - Local Docker foundation: implemented
 - PostgreSQL/PostGIS container: implemented
 - Redis container: implemented
-- Flood-risk engine: planned
+- Flood-risk engine: implemented (flood-v0.1)
 - React dashboard: planned
 - AI Copilot tools: planned
 - Real-time event system: planned
@@ -48,16 +48,32 @@ Do not treat planned components as implemented.
 
 ## Local quick start
 
-NaN
-NaN
-NaN
+From the repository root, start PostGIS, Redis, Ollama, and the RAG API:
 
-API:
+```bash
+docker compose up -d --build
+```
+
+RAG API:
 - http://localhost:8000
 - http://localhost:8000/docs
 - http://localhost:8000/health
 
-For native development, see docs/local-development.md.
+From `backend`, install dependencies and start the flood risk API:
+
+```cmd
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8001
+```
+
+Risk API:
+- http://localhost:8001
+- http://localhost:8001/docs
+- http://localhost:8001/health
+
+For native RAG development, see docs/local-development.md.
 
 ## Implementation phases
 

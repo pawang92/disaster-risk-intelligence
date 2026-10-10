@@ -12,6 +12,23 @@ def test_health() -> None:
     assert body["status"] == "ok"
 
 
+def test_risk_assessment_requires_coordinates() -> None:
+    response = client.post(
+        "/api/v1/risk/assess",
+        json={
+            "location": {
+                "village": "Test Village",
+                "district": "Mumbai",
+                "state": "Maharashtra",
+            },
+            "hazard": "flood",
+            "question": "What is the flood risk?",
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_risk_assessment_contract() -> None:
     response = client.post(
         "/api/v1/risk/assess",
@@ -78,8 +95,9 @@ def test_risk_assessment_contract() -> None:
     assert 0.0 <= historical_flood["historical_flood_risk"] <= 1.0
     assert historical_flood["source"] == "local_historical_flood_rasters"
 
-    assert "historical_flood" in risk_assessment["inputs"]
-    assert "historical_flood" in risk_assessment["inputs"]
+    assert "building_exposure" in inputs
     assert "historical_flood" in risk_assessment["contributing_factors"] or (
         historical_flood["historical_flood_risk"] < 0.50
     )
+    assert body["recommendations"]
+    assert body["map_data"]["features"]

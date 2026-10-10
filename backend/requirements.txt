@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+httpx
+numpy
+rasterio
+geopandas
+shapely
+pyproj
+psycopg2-binary
+pytest
+pytest-asyncio

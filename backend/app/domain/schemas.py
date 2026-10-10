@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class HazardType(str, Enum):
@@ -25,6 +25,12 @@ class LocationInput(BaseModel):
     @classmethod
     def strip_text(cls, value: Any) -> Any:
         return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def require_coordinates(self) -> "LocationInput":
+        if self.latitude is None or self.longitude is None:
+            raise ValueError("latitude and longitude are required")
+        return self
 
 
 class RiskAssessmentRequest(BaseModel):

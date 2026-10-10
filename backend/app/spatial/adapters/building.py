@@ -2,15 +2,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+from pathlib import Path
 from typing import Any
 
+import geopandas as gpd
+import numpy as np
 import psycopg2
+import rasterio
 from psycopg2 import sql
+from rasterio.features import shapes
+from shapely.geometry import box, shape
+from shapely.ops import unary_union
 
 
 @dataclass(frozen=True, slots=True)
 class BuildingExposureResult:
-    """Building exposure calculated from authoritative PostGIS layers."""
+    """Building exposure calculated from flood extent and building footprints."""
 
     buildings_at_risk: int
     total_buildings_in_analysis_area: int
@@ -21,6 +28,109 @@ class BuildingExposureResult:
 
 
 class BuildingExposureAdapter:
+    """
+    Calculate flood-exposed buildings from local vector and raster files.
+
+    A building is considered affected when its footprint intersects flooded
+    pixels. The analysis-area denominator is the flood raster bounding box,
+    matching the project's validated exposure definition. If the flood mask
+    contains no flooded pixels, exposure is zero.
+    """
+
+    def __init__(
+        self,
+        building_path: str | Path,
+        flood_mask_path: str | Path,
+        *,
+        source: str = "Building footprints + Sentinel-1",
+    ) -> None:
+        self.building_path = Path(building_path)
+        self.flood_mask_path = Path(flood_mask_path)
+        self.source = source
+
+        if not self.building_path.exists():
+            raise FileNotFoundError(
+                f"Building dataset not found: {self.building_path}"
+            )
+
+        if not self.flood_mask_path.exists():
+            raise FileNotFoundError(
+                f"Flood mask raster not found: {self.flood_mask_path}"
+            )
+
+    def calculate(self) -> BuildingExposureResult:
+        buildings = gpd.read_file(self.building_path)
+        if buildings.crs is None:
+            raise ValueError("Building dataset does not contain a CRS.")
+
+        buildings = buildings[buildings.geometry.notna() & ~buildings.geometry.is_empty]
+        if buildings.empty:
+            return self._result(0, 0)
+
+        with rasterio.open(self.flood_mask_path) as flood_src:
+            if flood_src.crs is None:
+                raise ValueError("Flood mask raster does not contain a CRS.")
+
+            flood_data = flood_src.read(1, masked=True)
+            raw_values = np.ma.getdata(flood_data)
+            flooded = (~np.ma.getmaskarray(flood_data)) & (raw_values > 0)
+
+            if not np.any(flooded):
+                return self._result(0, 0)
+
+            flood_polygons = [
+                shape(geom)
+                for geom, value in shapes(
+                    raw_values.astype("uint8", copy=False),
+                    mask=flooded,
+                    transform=flood_src.transform,
+                )
+                if value > 0
+            ]
+            if not flood_polygons:
+                return self._result(0, 0)
+
+            flood_geometry = unary_union(flood_polygons)
+            analysis_area = box(
+                flood_src.bounds.left,
+                flood_src.bounds.bottom,
+                flood_src.bounds.right,
+                flood_src.bounds.top,
+            )
+            flood_crs = flood_src.crs
+
+        buildings = buildings.to_crs(flood_crs)
+        in_analysis_area = buildings[buildings.intersects(analysis_area)]
+        at_risk = in_analysis_area[in_analysis_area.intersects(flood_geometry)]
+
+        total = int(len(in_analysis_area))
+        affected = int(len(at_risk))
+        return self._result(affected, total)
+
+    def _result(
+        self,
+        buildings_at_risk: int,
+        total_buildings_in_analysis_area: int,
+    ) -> BuildingExposureResult:
+        percentage = (
+            round(
+                buildings_at_risk / total_buildings_in_analysis_area * 100.0,
+                2,
+            )
+            if total_buildings_in_analysis_area > 0
+            else 0.0
+        )
+        return BuildingExposureResult(
+            buildings_at_risk=buildings_at_risk,
+            total_buildings_in_analysis_area=total_buildings_in_analysis_area,
+            affected_building_percentage=percentage,
+            source=self.source,
+            building_dataset=self.building_path.name,
+            flood_mask_dataset=self.flood_mask_path.name,
+        )
+
+
+class BuildingPostGISExposureAdapter:
     """
     Calculate flood-exposed buildings from PostGIS.
 
@@ -66,7 +176,7 @@ class BuildingExposureAdapter:
             """
             WITH flood_analysis_area AS (
                 SELECT
-                    ST_Envelope(ST_UnaryUnion(f.geom)) AS geom
+                    ST_Envelope(ST_Union(f.geom)) AS geom
                 FROM {flood_table} AS f
             ),
             metrics AS (
@@ -171,7 +281,9 @@ class BuildingExposureAdapter:
 
     @staticmethod
     def _validate_identifier(value: str, field_name: str) -> str:
-        if not value or not BuildingExposureAdapter._IDENTIFIER_RE.fullmatch(value):
+        if not value or not BuildingPostGISExposureAdapter._IDENTIFIER_RE.fullmatch(
+            value
+        ):
             raise ValueError(
                 f"{field_name} must be a simple PostgreSQL identifier: {value!r}"
             )
