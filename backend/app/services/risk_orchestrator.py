@@ -18,6 +18,7 @@ from app.spatial.adapters.building import (
     BuildingExposureAdapter,
     BuildingPostGISExposureAdapter,
 )
+from app.spatial.adapters.railway import RailwayPostGISExposureAdapter
 from app.spatial.adapters.elevation import ElevationAdapter
 from app.spatial.adapters.rainfall import RainfallAdapter
 from app.spatial.adapters.flood_extent import FloodExtentAdapter
@@ -43,6 +44,7 @@ class RiskOrchestrator:
     building_exposure_adapter: (
         BuildingExposureAdapter | BuildingPostGISExposureAdapter | None
     ) = None
+    railway_exposure_adapter: RailwayPostGISExposureAdapter | None = None
 
     def __post_init__(self) -> None:
         if self.spatial_engine is None:
@@ -170,6 +172,16 @@ class RiskOrchestrator:
                     "building_exposure_backend must be 'postgis', 'file', or 'disabled'."
                 )
 
+        if (
+            self.railway_exposure_adapter is None
+            and self.settings.building_exposure_backend == "postgis"
+        ):
+            self.railway_exposure_adapter = RailwayPostGISExposureAdapter(
+                database_url=self.settings.postgis_url,
+                railway_table="mumbai_suburban_railway",
+                flood_table="mumbai_s1_flood_extent",
+            )
+
     async def assess(
         self,
         request: RiskAssessmentRequest,
@@ -220,6 +232,12 @@ class RiskOrchestrator:
         building_exposure = (
             self.building_exposure_adapter.calculate()
             if request.include_exposure and self.building_exposure_adapter is not None
+            else None
+        )
+
+        railway_exposure = (
+            self.railway_exposure_adapter.calculate()
+            if request.include_exposure and self.railway_exposure_adapter is not None
             else None
         )
 
