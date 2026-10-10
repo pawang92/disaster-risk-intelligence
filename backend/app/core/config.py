@@ -27,6 +27,8 @@ class Settings(BaseSettings):
         "postgresql+psycopg://disaster:disaster@localhost:5432/disaster_risk"
     )
     building_exposure_backend: Literal["postgis", "file", "disabled"] = "postgis"
+    road_exposure_enabled: bool = False
+    road_exposure_table: str = "mumbai_suburban_roads"
     redis_url: str = "redis://localhost:6379/0"
 
     default_hazard: str = "flood"
