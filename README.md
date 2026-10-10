@@ -110,11 +110,11 @@ The default PostGIS source is `mumbai_suburban_poi`, with `fclass` and `geom` co
 
 ### Road exposure
 
-Road analysis is implemented but disabled by default because the current local database inventory does not include a roads table. After importing road segments with `fclass` and `geom` columns in the same SRID as the flood layer, configure:
+Road analysis is implemented for the `mumbai_suburban_roads` table. In environments where this table has been imported (as in the current local database), enable it in `.env` using the settings below. The table must contain road geometries in `geom`, road classes in `fclass`, and use the same SRID as `mumbai_s1_flood_extent`. The application does not enable road exposure automatically in deployments where the table may not exist:
 
 ```env
 ROAD_EXPOSURE_ENABLED=true
 ROAD_EXPOSURE_TABLE=mumbai_suburban_roads
 ```
 
-The table name can be changed with `ROAD_EXPOSURE_TABLE`. Keep road exposure disabled until the configured table exists and has valid geometry. Road metrics count intersecting road features, not kilometers of road affected.
+The table name can be changed with `ROAD_EXPOSURE_TABLE`. Set `ROAD_EXPOSURE_ENABLED=true` only after verifying the table schema and geometry SRID. Restart the risk API after changing `.env`. Road metrics count intersecting road features, not kilometers of road affected.
