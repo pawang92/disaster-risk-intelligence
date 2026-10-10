@@ -14,7 +14,15 @@ from app.domain.schemas import (
     RiskAssessmentResponse,
 )
 from app.risk.flood import FloodRiskEngine, FloodRiskInput
-from app.spatial.adapters.building import BuildingExposureAdapter
+from app.spatial.adapters.building import (
+    BuildingExposureAdapter,
+    BuildingPostGISExposureAdapter,
+)
+from app.spatial.adapters.railway import RailwayPostGISExposureAdapter
+from app.spatial.adapters.critical_infrastructure import (
+    CriticalInfrastructurePostGISExposureAdapter,
+)
+from app.spatial.adapters.road import RoadPostGISExposureAdapter
 from app.spatial.adapters.elevation import ElevationAdapter
 from app.spatial.adapters.rainfall import RainfallAdapter
 from app.spatial.adapters.flood_extent import FloodExtentAdapter
@@ -37,7 +45,12 @@ class RiskOrchestrator:
     river_proximity_adapter: RiverProximityAdapter | None = None
     historical_flood_adapter: HistoricalFloodAdapter | None = None
     population_exposure_adapter: PopulationExposureAdapter | None = None
-    building_exposure_adapter: BuildingExposureAdapter | None = None
+    building_exposure_adapter: (
+        BuildingExposureAdapter | BuildingPostGISExposureAdapter | None
+    ) = None
+    railway_exposure_adapter: RailwayPostGISExposureAdapter | None = None
+    critical_infrastructure_adapter: CriticalInfrastructurePostGISExposureAdapter | None = None
+    road_exposure_adapter: RoadPostGISExposureAdapter | None = None
 
     def __post_init__(self) -> None:
         if self.spatial_engine is None:
@@ -135,23 +148,64 @@ class RiskOrchestrator:
             )
 
         if self.building_exposure_adapter is None:
-            building_path = (
-                project_root
-                / "data"
-                / "buildings"
-                / "mumbai_building_footprints.geojson"
-            )
-            flood_extent_path = (
-                project_root
-                / "data"
-                / "flood_extent"
-                / "mumbai_s1_flood_extent.tif"
-            )
-            if building_path.exists() and flood_extent_path.exists():
-                self.building_exposure_adapter = BuildingExposureAdapter(
-                    building_path=building_path,
-                    flood_mask_path=flood_extent_path,
+            backend = self.settings.building_exposure_backend
+            if backend == "postgis":
+                self.building_exposure_adapter = BuildingPostGISExposureAdapter(
+                    database_url=self.settings.postgis_url,
+                    building_table="mumbai_building_footprints",
+                    flood_table="mumbai_s1_flood_extent",
                 )
+            elif backend == "file":
+                building_path = (
+                    project_root
+                    / "data"
+                    / "buildings"
+                    / "mumbai_building_footprints.geojson"
+                )
+                flood_extent_path = (
+                    project_root
+                    / "data"
+                    / "flood_extent"
+                    / "mumbai_s1_flood_extent.tif"
+                )
+                if building_path.exists() and flood_extent_path.exists():
+                    self.building_exposure_adapter = BuildingExposureAdapter(
+                        building_path=building_path,
+                        flood_mask_path=flood_extent_path,
+                    )
+            elif backend != "disabled":
+                raise ValueError(
+                    "building_exposure_backend must be 'postgis', 'file', or 'disabled'."
+                )
+
+        if (
+            self.railway_exposure_adapter is None
+            and self.settings.building_exposure_backend == "postgis"
+        ):
+            self.railway_exposure_adapter = RailwayPostGISExposureAdapter(
+                database_url=self.settings.postgis_url,
+                railway_table="mumbai_suburban_railway",
+                flood_table="mumbai_s1_flood_extent",
+            )
+
+        if (
+            self.critical_infrastructure_adapter is None
+            and self.settings.building_exposure_backend == "postgis"
+        ):
+            self.critical_infrastructure_adapter = (
+                CriticalInfrastructurePostGISExposureAdapter(
+                    database_url=self.settings.postgis_url,
+                    poi_table="mumbai_suburban_poi",
+                    flood_table="mumbai_s1_flood_extent",
+                )
+            )
+
+        if self.road_exposure_adapter is None and self.settings.road_exposure_enabled:
+            self.road_exposure_adapter = RoadPostGISExposureAdapter(
+                database_url=self.settings.postgis_url,
+                road_table=self.settings.road_exposure_table,
+                flood_table="mumbai_s1_flood_extent",
+            )
 
     async def assess(
         self,
@@ -203,6 +257,24 @@ class RiskOrchestrator:
         building_exposure = (
             self.building_exposure_adapter.calculate()
             if request.include_exposure and self.building_exposure_adapter is not None
+            else None
+        )
+
+        railway_exposure = (
+            self.railway_exposure_adapter.calculate()
+            if request.include_exposure and self.railway_exposure_adapter is not None
+            else None
+        )
+
+        critical_infrastructure_exposure = (
+            self.critical_infrastructure_adapter.calculate()
+            if request.include_exposure and self.critical_infrastructure_adapter is not None
+            else None
+        )
+
+        road_exposure = (
+            self.road_exposure_adapter.calculate()
+            if request.include_exposure and self.road_exposure_adapter is not None
             else None
         )
 
@@ -301,6 +373,21 @@ class RiskOrchestrator:
                     if building_exposure is not None
                     else None
                 ),
+                "railway_exposure": (
+                    {
+                        "source": railway_exposure.source,
+                        "railway_dataset": railway_exposure.railway_dataset,
+                        "flood_dataset": railway_exposure.flood_dataset,
+                        "railways_at_risk": railway_exposure.railways_at_risk,
+                        "total_railway_features_in_analysis_area": (
+                            railway_exposure.total_railway_features_in_analysis_area
+                        ),
+                        "affected_railway_percentage": railway_exposure.affected_railway_percentage,
+                        "affected_by_class": railway_exposure.affected_by_class,
+                    }
+                    if railway_exposure is not None
+                    else None
+                ),
             },
         )
 
@@ -309,6 +396,9 @@ class RiskOrchestrator:
         exposure = self._exposure_assessment(
             population_exposure,
             building_exposure,
+            railway_exposure,
+            critical_infrastructure_exposure,
+            road_exposure,
         )
 
         return RiskAssessmentResponse(
@@ -414,6 +504,50 @@ class RiskOrchestrator:
                         if building_exposure is not None
                         else None
                     ),
+                    "railway_exposure": (
+                        {
+                            "railways_at_risk": railway_exposure.railways_at_risk,
+                            "total_railway_features_in_analysis_area": (
+                                railway_exposure.total_railway_features_in_analysis_area
+                            ),
+                            "affected_railway_percentage": railway_exposure.affected_railway_percentage,
+                            "affected_by_class": railway_exposure.affected_by_class,
+                            "source": railway_exposure.source,
+                            "railway_dataset": railway_exposure.railway_dataset,
+                            "flood_dataset": railway_exposure.flood_dataset,
+                        }
+                        if railway_exposure is not None
+                        else None
+                    ),
+                    "critical_infrastructure_exposure": (
+                        {
+                            "critical_assets_at_risk": critical_infrastructure_exposure.critical_assets_at_risk,
+                            "total_critical_assets_in_analysis_area": critical_infrastructure_exposure.total_critical_assets_in_analysis_area,
+                            "affected_critical_asset_percentage": critical_infrastructure_exposure.affected_critical_asset_percentage,
+                            "affected_by_category": critical_infrastructure_exposure.affected_by_category,
+                            "totals_by_category": critical_infrastructure_exposure.totals_by_category,
+                            "affected_percentage_by_category": critical_infrastructure_exposure.affected_percentage_by_category,
+                            "source": critical_infrastructure_exposure.source,
+                            "poi_dataset": critical_infrastructure_exposure.poi_dataset,
+                            "flood_dataset": critical_infrastructure_exposure.flood_dataset,
+                        }
+                        if critical_infrastructure_exposure is not None
+                        else None
+                    ),
+                    "road_exposure": (
+                        {
+                            "roads_at_risk": road_exposure.roads_at_risk,
+                            "total_road_features_in_analysis_area": road_exposure.total_road_features_in_analysis_area,
+                            "affected_road_percentage": road_exposure.affected_road_percentage,
+                            "affected_by_class": road_exposure.affected_by_class,
+                            "totals_by_class": road_exposure.totals_by_class,
+                            "source": road_exposure.source,
+                            "road_dataset": road_exposure.road_dataset,
+                            "flood_dataset": road_exposure.flood_dataset,
+                        }
+                        if road_exposure is not None
+                        else None
+                    ),
                 },
             ),
             exposure=exposure,
@@ -430,7 +564,13 @@ class RiskOrchestrator:
                 "Population exposure is estimated by area-weighting the flood "
                 "mask onto the WorldPop grid. The affected population percentage "
                 "uses the valid population within the flood raster analysis "
-                "bounding box as its denominator."
+                "bounding box as its denominator. Building exposure is calculated "
+                "from the configured source (PostGIS by default) against the mapped "
+                "flood extent; its denominator is buildings within the flood extent "
+                "bounding box, not a user-selected radius. Critical "
+                "infrastructure exposure counts configured OpenStreetMap POI "
+                "categories intersecting the mapped flood polygon. Road exposure "
+                "is optional and requires a configured PostGIS road-segment table."
             ),
         )
 
@@ -465,8 +605,17 @@ class RiskOrchestrator:
     def _exposure_assessment(
         population_exposure,
         building_exposure,
+        railway_exposure=None,
+        critical_infrastructure_exposure=None,
+        road_exposure=None,
     ) -> ExposureAssessment | None:
-        if population_exposure is None and building_exposure is None:
+        if (
+            population_exposure is None
+            and building_exposure is None
+            and railway_exposure is None
+            and critical_infrastructure_exposure is None
+            and road_exposure is None
+        ):
             return None
 
         details: dict[str, object] = {}
@@ -503,7 +652,62 @@ class RiskOrchestrator:
                         building_exposure.affected_building_percentage
                     ),
                     "building_percentage_denominator": (
-                        "buildings intersecting the flood raster bounding box"
+                        "buildings intersecting the mapped flood extent bounding box"
+                    ),
+                }
+            )
+
+        if railway_exposure is not None:
+            details.update(
+                {
+                    "railway_source": railway_exposure.source,
+                    "railway_dataset": railway_exposure.railway_dataset,
+                    "railway_flood_dataset": railway_exposure.flood_dataset,
+                    "railways_at_risk": railway_exposure.railways_at_risk,
+                    "total_railway_features_in_analysis_area": (
+                        railway_exposure.total_railway_features_in_analysis_area
+                    ),
+                    "affected_railway_percentage": (
+                        railway_exposure.affected_railway_percentage
+                    ),
+                    "railways_at_risk_by_class": railway_exposure.affected_by_class,
+                    "railway_percentage_denominator": (
+                        "railway line features intersecting the mapped flood extent bounding box"
+                    ),
+                }
+            )
+
+        if critical_infrastructure_exposure is not None:
+            details.update(
+                {
+                    "critical_infrastructure_source": critical_infrastructure_exposure.source,
+                    "critical_infrastructure_dataset": critical_infrastructure_exposure.poi_dataset,
+                    "critical_infrastructure_flood_dataset": critical_infrastructure_exposure.flood_dataset,
+                    "critical_assets_at_risk": critical_infrastructure_exposure.critical_assets_at_risk,
+                    "total_critical_assets_in_analysis_area": critical_infrastructure_exposure.total_critical_assets_in_analysis_area,
+                    "affected_critical_asset_percentage": critical_infrastructure_exposure.affected_critical_asset_percentage,
+                    "critical_assets_at_risk_by_category": critical_infrastructure_exposure.affected_by_category,
+                    "critical_assets_by_category": critical_infrastructure_exposure.totals_by_category,
+                    "affected_percentage_by_category": critical_infrastructure_exposure.affected_percentage_by_category,
+                    "critical_asset_percentage_denominator": (
+                        "configured critical POIs intersecting the mapped flood extent bounding box"
+                    ),
+                }
+            )
+
+        if road_exposure is not None:
+            details.update(
+                {
+                    "road_source": road_exposure.source,
+                    "road_dataset": road_exposure.road_dataset,
+                    "road_flood_dataset": road_exposure.flood_dataset,
+                    "roads_at_risk": road_exposure.roads_at_risk,
+                    "total_road_features_in_analysis_area": road_exposure.total_road_features_in_analysis_area,
+                    "affected_road_percentage": road_exposure.affected_road_percentage,
+                    "roads_at_risk_by_class": road_exposure.affected_by_class,
+                    "road_features_by_class": road_exposure.totals_by_class,
+                    "road_percentage_denominator": (
+                        "road features intersecting the mapped flood extent bounding box"
                     ),
                 }
             )
@@ -528,6 +732,14 @@ class RiskOrchestrator:
                 population_exposure.affected_population_percentage
                 if population_exposure is not None
                 else None
+            ),
+            critical_assets_at_risk=(
+                critical_infrastructure_exposure.critical_assets_at_risk
+                if critical_infrastructure_exposure is not None
+                else None
+            ),
+            roads_at_risk=(
+                road_exposure.roads_at_risk if road_exposure is not None else None
             ),
             details=details,
         )
