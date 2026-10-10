@@ -1,6 +1,10 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.spatial.adapters.building import (
+    BuildingExposureResult,
+    BuildingPostGISExposureAdapter,
+)
 
 client = TestClient(app)
 
@@ -29,7 +33,21 @@ def test_risk_assessment_requires_coordinates() -> None:
     assert response.status_code == 422
 
 
-def test_risk_assessment_contract() -> None:
+def test_risk_assessment_contract(monkeypatch) -> None:
+    # Keep this API contract test independent of local PostgreSQL credentials.
+    monkeypatch.setattr(
+        BuildingPostGISExposureAdapter,
+        "calculate",
+        lambda self: BuildingExposureResult(
+            buildings_at_risk=1,
+            total_buildings_in_analysis_area=100,
+            affected_building_percentage=1.0,
+            source="PostGIS building footprints + Sentinel-1 flood extent",
+            building_dataset=self.building_table,
+            flood_mask_dataset=self.flood_table,
+        ),
+    )
+
     response = client.post(
         "/api/v1/risk/assess",
         json={
