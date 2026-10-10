@@ -318,6 +318,21 @@ class RiskOrchestrator:
                     if building_exposure is not None
                     else None
                 ),
+                "railway_exposure": (
+                    {
+                        "source": railway_exposure.source,
+                        "railway_dataset": railway_exposure.railway_dataset,
+                        "flood_dataset": railway_exposure.flood_dataset,
+                        "railways_at_risk": railway_exposure.railways_at_risk,
+                        "total_railway_features_in_analysis_area": (
+                            railway_exposure.total_railway_features_in_analysis_area
+                        ),
+                        "affected_railway_percentage": railway_exposure.affected_railway_percentage,
+                        "affected_by_class": railway_exposure.affected_by_class,
+                    }
+                    if railway_exposure is not None
+                    else None
+                ),
             },
         )
 
@@ -326,6 +341,7 @@ class RiskOrchestrator:
         exposure = self._exposure_assessment(
             population_exposure,
             building_exposure,
+            railway_exposure,
         )
 
         return RiskAssessmentResponse(
@@ -429,6 +445,21 @@ class RiskOrchestrator:
                             ),
                         }
                         if building_exposure is not None
+                        else None
+                    ),
+                    "railway_exposure": (
+                        {
+                            "railways_at_risk": railway_exposure.railways_at_risk,
+                            "total_railway_features_in_analysis_area": (
+                                railway_exposure.total_railway_features_in_analysis_area
+                            ),
+                            "affected_railway_percentage": railway_exposure.affected_railway_percentage,
+                            "affected_by_class": railway_exposure.affected_by_class,
+                            "source": railway_exposure.source,
+                            "railway_dataset": railway_exposure.railway_dataset,
+                            "flood_dataset": railway_exposure.flood_dataset,
+                        }
+                        if railway_exposure is not None
                         else None
                     ),
                 },
