@@ -9,6 +9,7 @@ from app.spatial.adapters.critical_infrastructure import (
     CriticalInfrastructureExposureResult,
     CriticalInfrastructurePostGISExposureAdapter,
 )
+from app.services.risk_orchestrator import get_risk_orchestrator
 
 client = TestClient(app)
 
@@ -21,6 +22,10 @@ def test_health() -> None:
 
 
 def test_risk_assessment_requires_coordinates() -> None:
+    # This contract test must not depend on ROAD_EXPOSURE_ENABLED in a developer's
+    # local .env or on the optional road table existing in their database.
+    monkeypatch.setattr(get_risk_orchestrator(), "road_exposure_adapter", None)
+
     response = client.post(
         "/api/v1/risk/assess",
         json={
