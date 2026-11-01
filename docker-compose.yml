@@ -1,0 +1,95 @@
+services:
+  rag:
+    build:
+      context: ./backend/rag
+    container_name: disaster-rag
+    environment:
+      ENV_FILE: /service/.env.docker
+      ANSWER_PROVIDER: ${ANSWER_PROVIDER:-ollama}
+      GROK_API_KEY: ${GROK_API_KEY:-}
+      GROK_BASE_URL: ${GROK_BASE_URL:-https://api.x.ai/v1}
+      GROK_MODEL: ${GROK_MODEL:-openai/gpt-oss-120b}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:4b}
+      EMBEDDING_PROVIDER: local
+      LOCAL_EMBEDDING_MODEL: intfloat/multilingual-e5-base
+      CHROMA_COLLECTION: disaster-guidance
+      CHROMA_PATH: /data/chroma
+      DEBUG: ${DEBUG:-false}
+    volumes:
+      - rag_chroma:/data/chroma
+      - hf_cache:/root/.cache/huggingface
+    ports:
+      - "8000:8000"
+    depends_on:
+      ollama:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: disaster-postgis
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-disaster_risk}
+      POSTGRES_USER: ${POSTGRES_USER:-disaster}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-disaster}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-disaster} -d ${POSTGRES_DB:-disaster_risk}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: disaster-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: disaster-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+  rag_chroma:
+  hf_cache:

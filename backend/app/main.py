@@ -8,7 +8,8 @@ import io
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-
+from app.api.routes.risk import router as risk_router
+from app.core.config import get_settings
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -27,6 +28,8 @@ app = FastAPI(
     description="Local-first geospatial data catalog, map layers, spatial queries, and document guidance API.",
     version="1.0.0",
 )
+settings = get_settings()
+app.include_router(risk_router, prefix=settings.api_prefix)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000").split(","),
@@ -293,6 +296,13 @@ def get_raster(raster_id: str) -> dict[str, Any]:
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "disaster-risk-intelligence", "version": app.version}
 
+@app.get("/health", tags=["system"])
+async def health_check():
+    return {
+        "status": "ok",
+        "service": "disaster-risk-intelligence",
+        "environment": get_settings().environment,
+    }
 
 @app.get("/api/v1/overview")
 def overview() -> dict[str, Any]:
