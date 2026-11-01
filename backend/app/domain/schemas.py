@@ -48,6 +48,7 @@ class RiskAssessment(BaseModel):
     risk_score: float | None = Field(default=None, ge=0, le=1)
     affected_area_sq_km: float | None = Field(default=None, ge=0)
     methodology_version: str | None = None
+    contributing_factors: list[str] = Field(default_factory=list)
     inputs: dict[str, Any] = Field(default_factory=dict)
 
 
