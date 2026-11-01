@@ -1,0 +1,14 @@
+.git
+.venv
+venv
+__pycache__
+.pytest_cache
+.chroma
+*.pyc
+*.log
+.env
+.env.local
+data
+notebooks
+tests
+*.ipynb
