@@ -16,7 +16,11 @@ async def test_spatial_engine_preserves_location() -> None:
         )
     )
 
-    assert result.source == "local-placeholder"
+    assert result.source == "request-coordinates"
     assert result.location.village == "Test Village"
     assert result.location.latitude == 19.0760
     assert result.map_data["type"] == "FeatureCollection"
+    assert result.map_data["features"][0]["geometry"]["coordinates"] == [
+        72.8777,
+        19.0760,
+    ]

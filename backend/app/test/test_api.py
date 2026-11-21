@@ -1,6 +1,15 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.spatial.adapters.building import (
+    BuildingExposureResult,
+    BuildingPostGISExposureAdapter,
+)
+from app.spatial.adapters.critical_infrastructure import (
+    CriticalInfrastructureExposureResult,
+    CriticalInfrastructurePostGISExposureAdapter,
+)
+from app.services.risk_orchestrator import get_risk_orchestrator
 
 client = TestClient(app)
 
@@ -12,7 +21,61 @@ def test_health() -> None:
     assert body["status"] == "ok"
 
 
-def test_risk_assessment_contract() -> None:
+def test_risk_assessment_requires_coordinates() -> None:
+    response = client.post(
+        "/api/v1/risk/assess",
+        json={
+            "location": {
+                "village": "Test Village",
+                "district": "Mumbai",
+                "state": "Maharashtra",
+            },
+            "hazard": "flood",
+            "question": "What is the flood risk?",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_risk_assessment_contract(monkeypatch) -> None:
+    # Keep this API contract test independent of local PostgreSQL credentials.
+    # Ignore optional road exposure configuration in a developer's .env.
+    # Road exposure has separate adapter tests and is disabled for this API contract.
+    monkeypatch.setattr(get_risk_orchestrator(), "road_exposure_adapter", None)
+    monkeypatch.setattr(
+        BuildingPostGISExposureAdapter,
+        "calculate",
+        lambda self: BuildingExposureResult(
+            buildings_at_risk=1,
+            total_buildings_in_analysis_area=100,
+            affected_building_percentage=1.0,
+            source="PostGIS building footprints + Sentinel-1 flood extent",
+            building_dataset=self.building_table,
+            flood_mask_dataset=self.flood_table,
+        ),
+    )
+
+    monkeypatch.setattr(
+        CriticalInfrastructurePostGISExposureAdapter,
+        "calculate",
+        lambda self: CriticalInfrastructureExposureResult(
+            critical_assets_at_risk=3,
+            total_critical_assets_in_analysis_area=30,
+            affected_critical_asset_percentage=10.0,
+            affected_by_category={"hospital": 2, "pharmacy": 1},
+            totals_by_category={"hospital": 10, "pharmacy": 5, "school": 15},
+            affected_percentage_by_category={
+                "hospital": 20.0,
+                "pharmacy": 20.0,
+                "school": 0.0,
+            },
+            source="test POIs + flood extent",
+            poi_dataset=self.poi_table,
+            flood_dataset=self.flood_table,
+        ),
+    )
+
     response = client.post(
         "/api/v1/risk/assess",
         json={
@@ -78,8 +141,18 @@ def test_risk_assessment_contract() -> None:
     assert 0.0 <= historical_flood["historical_flood_risk"] <= 1.0
     assert historical_flood["source"] == "local_historical_flood_rasters"
 
-    assert "historical_flood" in risk_assessment["inputs"]
-    assert "historical_flood" in risk_assessment["inputs"]
+    assert "building_exposure" in inputs
+    critical = inputs["critical_infrastructure_exposure"]
+    assert critical["critical_assets_at_risk"] == 3
+    assert critical["affected_by_category"] == {"hospital": 2, "pharmacy": 1}
+    assert body["exposure"]["critical_assets_at_risk"] == 3
+    assert body["exposure"]["details"]["critical_assets_at_risk_by_category"] == {
+        "hospital": 2,
+        "pharmacy": 1,
+    }
+    assert body["exposure"]["roads_at_risk"] is None
     assert "historical_flood" in risk_assessment["contributing_factors"] or (
         historical_flood["historical_flood_risk"] < 0.50
     )
+    assert body["recommendations"]
+    assert body["map_data"]["features"]
