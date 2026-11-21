@@ -3,7 +3,7 @@ import logging
 
 from fastapi import FastAPI, HTTPException
 
-from .bedrock_rag import DisasterRag
+from .disaster_rag import DisasterRag
 from .config import get_settings
 from .ingest import language_of
 from .schema import (
@@ -42,15 +42,9 @@ def health() -> HealthResponse:
     )
 
 
-@app.post(
-    "/v1/retrieval-test",
-    response_model=RetrievalTestResponse,
-)
-def retrieval_test(
-    payload: RetrievalTestRequest,
-) -> RetrievalTestResponse:
+@app.post("/v1/retrieval-test",response_model=RetrievalTestResponse,)
+def retrieval_test(payload: RetrievalTestRequest,) -> RetrievalTestResponse:
     settings = get_settings()
-
     if not settings.debug:
         raise HTTPException(
             status_code=404,

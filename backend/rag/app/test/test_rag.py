@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 import pytest
 
-from app.bedrock_rag import DisasterRag
+from backend.rag.app.disaster_rag import DisasterRag
 from app.ingest import chunk_text, language_of, normalize_text
 
 
