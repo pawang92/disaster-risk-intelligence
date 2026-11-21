@@ -67,6 +67,39 @@ export interface GuidanceResult {
   service: string;
 }
 
+export interface RiskAssessmentResponse {
+  request_id: string;
+  location: { village?: string | null; district?: string | null; state?: string | null; latitude: number; longitude: number };
+  hazard: string;
+  risk_assessment: {
+    risk_level: string;
+    risk_score: number | null;
+    affected_area_sq_km: number | null;
+    methodology_version: string | null;
+    contributing_factors: string[];
+    inputs: Record<string, unknown>;
+  };
+  exposure: {
+    properties_at_risk: number | null;
+    population_at_risk: number | null;
+    population_in_analysis_area: number | null;
+    affected_population_percentage: number | null;
+    roads_at_risk: number | null;
+    critical_assets_at_risk: number | null;
+    details: Record<string, unknown>;
+  } | null;
+  recommendations: Array<{ action: string; priority: string; rationale?: string | null }>;
+  map_data: GeoJSON.FeatureCollection;
+  explanation: string | null;
+}
+
+export interface SystemStatus {
+  api: string;
+  guidance: { status: string; details?: { collection_count?: number; embedding_provider?: string; answer_provider?: string } | null };
+  postgis: { status: string };
+  spatial_provider: string;
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,

@@ -1,124 +1,69 @@
-# Local RAG setup — Windows Command Prompt
+# Local document RAG setup
 
-These steps use **Command Prompt (`cmd.exe`)**, not PowerShell. The pipeline stores vectors locally in the free Chroma database at `.chroma\`; no cloud vector database or AWS infrastructure deployment is needed.
+The RAG service is a separate FastAPI application in `backend/rag/`. Keep its environment and index separate from the risk API. The local profile uses multilingual E5 embeddings, Chroma persistence, and Ollama for answer generation. AWS credentials are optional unless you select Bedrock.
 
-## Before you start
+## 1. Install the local services
 
-Install Python 3.11 or newer and AWS CLI v2. You also need an AWS account with access to the Bedrock embedding and chat models selected in `.env.local`.
+Install Python 3.11+, then in PowerShell:
 
-Open **Command Prompt** and configure an AWS profile once. Replace `disaster-rag` with your own profile name if needed.
-
-```cmd
-aws configure --profile disaster-rag
-set AWS_PROFILE=disaster-rag
-aws sts get-caller-identity
-```
-
-The last command must show your AWS account ID. Your IAM user or role requires `bedrock:InvokeModel` permission for both configured models. Do not save AWS access keys in this repository or in `.env.local`.
-
-## 1. Create the Python environment
-
-Run these commands from Command Prompt:
-
-```cmd
-cd /d D:\python_projects\disaster-risk-intelligence\backend\rag
+```powershell
+Set-Location D:\python_projects\disaster-risk-intelligence\backend\rag
 py -m venv .venv
-.venv\Scripts\activate.bat
+.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-copy .env.example .env.local
+Copy-Item .env.example .env.local
 ```
 
-`cd /d` changes both the drive and directory. Every new Command Prompt window needs `.venv\Scripts\activate.bat` again.
+The default setting allows the E5 model to download into the Hugging Face cache on first use. You can warm it before starting the API to avoid a slow first request:
 
-## 2. Check `.env.local`
-
-Open `D:\python_projects\disaster-risk-intelligence\backend\rag\.env.local` in an editor. Keep the Chroma values as shown. Change `BEDROCK_CHAT_MODEL_ID` only if you enabled a different model in Bedrock.
-
-```dotenv
-AWS_REGION=ap-south-1
-CHROMA_COLLECTION=disaster-guidance
-CHROMA_PATH=./.chroma
-BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
-BEDROCK_CHAT_MODEL_ID=anthropic.claude-3-haiku-20240307-v1:0
-EMBEDDING_MIN_INTERVAL_SECONDS=8
-EMBEDDING_MAX_ATTEMPTS=8
-DEBUG=true
+```powershell
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-base')"
 ```
 
-For `AWS_REGION=ap-south-1`, this guide uses `anthropic.claude-3-haiku-20240307-v1:0`. In the AWS Console, open **Amazon Bedrock → Model catalog**, open Claude 3 Haiku, and complete the model-access request if your account has not enabled it yet.
+Install [Ollama](https://ollama.com/download) and fetch the configured chat model:
 
-### Free local answers with Ollama
-
-The document vectors already use local E5 embeddings. To avoid Bedrock answer-generation quotas and costs too, install [Ollama for Windows](https://ollama.com/download), then run this once in Command Prompt:
-
-```cmd
+```powershell
 ollama pull gemma3:4b
 ```
 
-Set these values in `.env.local` and restart the API:
+The default `.env.example` uses `EMBEDDING_PROVIDER=local`, `ANSWER_PROVIDER=ollama`, and a Chroma directory at `./.chroma`. Set `LOCAL_EMBEDDING_FILES_ONLY=true` only after the model is present in the runtime's Hugging Face cache. Edit `.env.local` to change providers. Keep API keys out of Git and logs. If using Bedrock, configure AWS credentials through the normal AWS credential chain; do not paste access keys into this file.
 
-```dotenv
-ANSWER_PROVIDER=ollama
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=gemma3:4b
+## 2. Ingest guidance PDFs
+
+Still inside `backend/rag/` with the virtual environment activated:
+
+```powershell
+python -m app.ingest "C:\path\to\flood-guidance.pdf" --district mumbai --disaster-type flood --dry-run
 ```
 
-`ANSWER_PROVIDER=ollama` never calls Bedrock to generate answers. Use `ANSWER_PROVIDER=auto` if you prefer Bedrock normally but want Ollama to handle throttling or quota errors. Ollama needs the model downloaded locally and enough RAM; no per-request cloud fee applies.
+Review the extraction/chunk count. For scanned PDFs, run with `--ocr` after installing the local OCR tools. Then remove `--dry-run` to index the document:
 
-### If Bedrock embeddings are throttled
-
-Use the free local multilingual embedding model instead. In `.env.local`, change the embedding settings to:
-
-```dotenv
-EMBEDDING_PROVIDER=local
-LOCAL_EMBEDDING_MODEL=intfloat/multilingual-e5-base
+```powershell
+python -m app.ingest "C:\path\to\flood-guidance.pdf" --district mumbai --disaster-type flood
 ```
 
-Run `pip install -r requirements.txt` again. On the first ingestion, the model downloads once (roughly 1 GB) and is then cached on your machine. Re-ingest every PDF after changing providers because the local and Bedrock embedding vectors are different. The application keeps them in separate Chroma collections so they cannot be mixed. Bedrock is still used only to generate the final natural-language answer.
+The CLI writes to the configured Chroma path. Keep the index directory persistent and backed up. Re-ingest into a new collection and verify it before switching if you change embedding models; vectors from different embedding models must not be mixed.
 
-Before ingesting, confirm the local provider is active. The command must print `Embedding provider: local`:
+## 3. Start the RAG API
 
-```cmd
-python -m app.ingest "C:\path\to\flood-guidance-marathi.pdf" --district mumbai --disaster-type flood --ocr --dry-run
+From `backend/rag/`:
+
+```powershell
+.venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8080
 ```
 
-`--dry-run` extracts the PDF and reports its chunk count without embedding or storing anything. It is safe to run with a large PDF. Remove `--dry-run` only after the provider line shows `local`.
+Open [http://127.0.0.1:8080/docs](http://127.0.0.1:8080/docs). Use `POST /v1/ask` for an English or Marathi question. `GET /health` reports the configured provider and Chroma collection. Retrieval diagnostics are disabled unless `DEBUG=true`; do not enable that setting on a public service.
 
-## 3. Ingest a PDF
+The risk API forwards guidance questions to `http://127.0.0.1:8080` by default. Set `RAG_API_URL` in the risk API process to change it. In Docker Compose the API uses the internal address `http://rag:8000`, while your host reaches RAG at port 8080.
 
-In the same activated Command Prompt, set the profile and configuration file, then replace the PDF path with your own path:
+## Provider choices
 
-```cmd
-set AWS_PROFILE=disaster-rag
-set ENV_FILE=D:\python_projects\disaster-risk-intelligence\backend\rag\.env.local
-python -m app.ingest "C:\path\to\flood-guidance-marathi.pdf" --district pune --disaster-type flood --ocr
-```
+Supported answer providers are `ollama`, `grok`, `gemini`, and `bedrock`. Embeddings support `local` and `bedrock`. `ANSWER_PROVIDER=auto` is not supported. Set a specific provider and configure its credentials or local service. Provider fallback order is configured in `DisasterRag.answer`; review outbound data policies before enabling external providers because retrieved document excerpts are sent with the question.
 
-Use `--ocr` for scanned PDFs. For PDFs where text can be selected and copied, omit `--ocr` for faster ingestion. The command creates/updates `backend\rag\.chroma\`.
+## Production boundary
 
-Large PDFs are supported. The ingestion process embeds one chunk at a time and intentionally pauses for eight seconds between requests to stay within conservative Bedrock limits. Do not start a second ingestion while one is running. If Bedrock still prints a throttling message, leave the command running: it retries with an increasing delay. Check **AWS Console → Service Quotas → Amazon Bedrock** for the request-per-minute and token-per-minute quota of your embedding model before reducing `EMBEDDING_MIN_INTERVAL_SECONDS`.
+This setup is for local development. Chroma is a single-node persistent store, ingestion is a CLI, and the API does not yet enforce user/document authorization or rate limits. Follow [the production RAG plan](../../docs/production-rag.md) before exposing the service to users.
 
-## 4. Start the API
-
-Use the same Command Prompt after ingestion:
-
-```cmd
-set AWS_PROFILE=disaster-rag
-set ENV_FILE=D:\python_projects\disaster-risk-intelligence\backend\rag\.env.local
-uvicorn app.main:app --reload --port 8080
-```
-
-Keep this window open. Open [http://127.0.0.1:8080/docs](http://127.0.0.1:8080/docs) in your browser and use `POST /v1/ask` to ask English or Marathi questions.
-
-## 5. Test from a second Command Prompt
-
-Open a second `cmd.exe` window and run:
-
-```cmd
-cd /d D:\python_projects\disaster-risk-intelligence\backend\rag
-.venv\Scripts\activate.bat
-curl.exe -X POST http://127.0.0.1:8080/v1/ask -H "Content-Type: application/json" -d "{\"question\":\"पूर येण्यापूर्वी कोणती तयारी करावी?\",\"language\":\"mr\",\"district\":\"pune\",\"disaster_type\":\"flood\"}"
-```
-
-The `.chroma\` folder is ignored by Git and persists across restarts. Delete it only when you deliberately want to erase the locally indexed documents.
+\n

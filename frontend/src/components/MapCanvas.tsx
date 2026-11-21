@@ -3,9 +3,12 @@ import { Map as MapLibreMapConstructor, NavigationControl, ScaleControl, type Ge
 import type { LayerInfo, RasterPreview } from '../api';
 
 export type DrawMode = 'navigate' | 'point' | 'polygon';
+export type Basemap = 'satellite' | 'terrain';
 
 interface Props {
   ready: boolean;
+  basemap: Basemap;
+  onBasemapChange: (basemap: Basemap) => void;
   layers: LayerInfo[];
   vectors: Record<string, GeoJSON.FeatureCollection>;
   rasters: Record<string, RasterPreview>;
@@ -26,11 +29,25 @@ function selectionCollection(geometry: GeoJSON.Geometry | null): GeoJSON.Feature
   return { type: 'FeatureCollection', features: geometry ? [{ type: 'Feature', properties: {}, geometry }] : [] };
 }
 
-export function MapCanvas({ ready, layers, vectors, rasters, visibility, result, selection, drawMode, onPoint, onPolygon, onMapReady }: Props) {
+function basemapStyle(kind: Basemap) {
+  const configuredTiles = kind === 'satellite'
+    ? import.meta.env.VITE_SATELLITE_TILE_URL
+    : import.meta.env.VITE_TERRAIN_TILE_URL;
+  const tiles = configuredTiles || (kind === 'satellite'
+    ? 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+    : 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}');
+  const attribution = kind === 'satellite'
+    ? 'Tiles © Esri, Maxar, Earthstar Geographics, and the GIS User Community'
+    : 'Tiles © Esri, HERE, Garmin, FAO, NOAA, USGS, OpenStreetMap contributors, and the GIS User Community';
+  return { version: 8 as const, sources: { basemap: { type: 'raster' as const, tiles: [tiles], tileSize: 256, attribution } }, layers: [{ id: 'basemap', type: 'raster' as const, source: 'basemap' }] };
+}
+
+export function MapCanvas({ ready, basemap, onBasemapChange, layers, vectors, rasters, visibility, result, selection, drawMode, onPoint, onPolygon, onMapReady }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const handlers = useRef({ onPoint, onPolygon, onMapReady, drawMode });
   const vertices = useRef<Array<[number, number]>>([]);
+  const initialBasemap = useRef(basemap);
 
   useEffect(() => { handlers.current = { onPoint, onPolygon, onMapReady, drawMode }; }, [onPoint, onPolygon, onMapReady, drawMode]);
 
@@ -38,7 +55,7 @@ export function MapCanvas({ ready, layers, vectors, rasters, visibility, result,
     if (!host.current || mapRef.current) return;
     const map = new MapLibreMapConstructor({
       container: host.current,
-      style: import.meta.env.VITE_MAP_STYLE_URL || 'https://demotiles.maplibre.org/style.json',
+      style: basemapStyle(basemap),
       center: [72.88, 19.12],
       zoom: 10.3,
       minZoom: 4,
@@ -59,8 +76,7 @@ export function MapCanvas({ ready, layers, vectors, rasters, visibility, result,
       }
       handlers.current.onMapReady?.(true);
     };
-    map.on('load', ensureSelection);
-    map.on('styledata', ensureSelection);
+    map.on('style.load', ensureSelection);
     map.on('error', (event) => { if (event.error) console.warn('MapLibre style/tile message:', event.error.message); });
     map.on('click', (event) => {
       if (handlers.current.drawMode === 'point') {
@@ -89,6 +105,16 @@ export function MapCanvas({ ready, layers, vectors, rasters, visibility, result,
     // Map construction is intentionally one-shot; event handlers read current callbacks from a ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (initialBasemap.current === basemap) return;
+    initialBasemap.current = basemap;
+    const map = mapRef.current;
+    if (!map) return;
+    handlers.current.onMapReady?.(false);
+    vertices.current = [];
+    map.setStyle(basemapStyle(basemap));
+  }, [basemap]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -138,5 +164,5 @@ export function MapCanvas({ ready, layers, vectors, rasters, visibility, result,
     if (map.getLayer('analysis-fill')) ['analysis-fill', 'analysis-line', 'analysis-point'].forEach((id) => map.setLayoutProperty(id, 'visibility', 'visible'));
   }, [ready, vectors, rasters, layers, visibility, result, selection]);
 
-  return <div className="map-canvas" ref={host} aria-label="Interactive MapLibre map" />;
+  return <div className="map-canvas-shell"><div className="map-canvas" ref={host} aria-label="Interactive MapLibre map" /><div className="basemap-switch" role="group" aria-label="Choose basemap"><button className={basemap === 'satellite' ? 'active' : ''} onClick={() => onBasemapChange('satellite')}>Satellite</button><button className={basemap === 'terrain' ? 'active' : ''} onClick={() => onBasemapChange('terrain')}>Terrain</button></div></div>;
 }

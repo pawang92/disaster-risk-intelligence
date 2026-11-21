@@ -15,20 +15,18 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:4b}
       EMBEDDING_PROVIDER: local
       LOCAL_EMBEDDING_MODEL: intfloat/multilingual-e5-base
+      LOCAL_EMBEDDING_FILES_ONLY: ${LOCAL_EMBEDDING_FILES_ONLY:-false}
       CHROMA_COLLECTION: disaster-guidance
       CHROMA_PATH: /data/chroma
+      HF_HOME: /data/hf_cache
       DEBUG: ${DEBUG:-false}
     volumes:
       - rag_chroma:/data/chroma
-      - hf_cache:/root/.cache/huggingface
+      - hf_cache:/data/hf_cache
     ports:
-      - "8000:8000"
+      - "8080:8000"
     depends_on:
       ollama:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
@@ -38,6 +36,34 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: disaster-risk-api
+    environment:
+      DISASTER_DATA_DIR: /app/data
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000,http://localhost:5173,http://127.0.0.1:5173}
+      POSTGIS_URL: ${POSTGIS_URL:-postgresql://disaster:disaster@postgres:5432/disaster_risk}
+      RAG_API_URL: http://rag:8000
+      GUIDANCE_PROVIDER: local
+      SPATIAL_PROVIDER: ${SPATIAL_PROVIDER:-local}
+      GEOAI_API_URL: ${GEOAI_API_URL:-http://host.docker.internal:8002}
+    volumes:
+      - ./data:/app/data:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   postgres:
     image: postgis/postgis:16-3.4

@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     # local | bedrock
     embedding_provider: str = "local"
     local_embedding_model: str = "intfloat/multilingual-e5-base"
+    local_embedding_files_only: bool = False
 
     embedding_dimensions: int = 1024
     embedding_min_interval_seconds: float = 8.0

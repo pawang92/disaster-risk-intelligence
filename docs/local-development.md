@@ -1,80 +1,39 @@
-# Local Development
+# Local development
 
-The primary development environment is local. AWS is not required for development or testing.
+The local development stack does not require AWS. For the complete dashboard workflow and Compose ports, see the root [README](../README.md).
 
-## Current local foundation
-- FastAPI flood risk API
-- FastAPI RAG API
-- Chroma vector store
-- multilingual E5 local embeddings
-- Ollama local LLM
-- PostgreSQL + PostGIS
-- Redis
-- Docker Compose
+## Risk API
 
-## Native flood risk API
-From `backend`:
+From the repository root in PowerShell:
 
-```cmd
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8001
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r backend\requirements-dev.txt
+$env:BUILDING_EXPOSURE_BACKEND = "disabled"
+uvicorn app.main:app --app-dir backend --reload --host 127.0.0.1 --port 8000
 ```
 
-Health: `http://localhost:8001/health`
-API docs: `http://localhost:8001/docs`
+API docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs). Set `BUILDING_EXPOSURE_BACKEND=postgis` only after PostGIS is reachable and the required exposure tables are loaded. Tests are in `backend/app/test/`.
 
-The risk API expects local datasets under `data/` (SRTM, IMERG rainfall, Sentinel-1 flood extent, rivers, historical flood, WorldPop). Building exposure is included when `data/buildings/mumbai_building_footprints.geojson` is present.
+## RAG API
 
-Run tests from `backend` with `pytest`.
+Follow [backend/rag/SETUP.md](../backend/rag/SETUP.md). It uses its own environment and starts on host port 8080. The risk API defaults to `RAG_API_URL=http://127.0.0.1:8080`.
 
-## Native RAG development
-From `backend/rag`:
+## Dashboard
 
-```cmd
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-copy .env.example .env.local
+In a third terminal:
+
+```powershell
+Set-Location frontend
+npm ci
+npm run dev
 ```
 
-Set `ANSWER_PROVIDER=ollama`, `EMBEDDING_PROVIDER=local`, and the local Ollama/Chroma values in `.env.local`.
+The dashboard opens at [http://127.0.0.1:5173](http://127.0.0.1:5173) and Vite proxies API calls to port 8000.
 
-Start Ollama with `ollama pull gemma3:4b`, then start the API with `uvicorn app.main:app --reload --port 8000`.
+## Compose services
 
-Health: `http://localhost:8000/health`
-API docs: `http://localhost:8000/docs`
+`docker compose up --build` starts the dashboard/API on host port 8000, RAG on 8080, PostGIS on 5432, and Ollama on 11434. The fresh PostGIS volume has no exposure tables; load data before turning on PostGIS building/railway/critical asset exposure. The RAG container downloads its local embedding model into a persistent Hugging Face volume on first use unless `LOCAL_EMBEDDING_FILES_ONLY=true` and the model has already been cached.
 
-## Docker Compose
-From the repository root:
-
-```bash
-docker compose up -d --build
-```
-
-Services: RAG API `:8000`, PostgreSQL/PostGIS `:5432`, Redis `:6379`, Ollama `:11434`.
-
-Check with `docker compose ps` and `docker compose logs -f rag`.
-
-## Embedding behavior
-The application uses `local_files_only=True` for the E5 model, so inference does not download from Hugging Face.
-
-Verify the native cache with:
-
-```cmd
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-base', local_files_only=True); print('MODEL LOAD OK')"
-```
-
-The Docker image must be supplied with the model cache before container RAG inference is used.
-
-## No AWS requirement
-The local profile does not require AWS credentials, Bedrock, S3, RDS, SQS, EventBridge, CloudFront or Cognito.
-
-## Development workflow
-1. Implement locally.
-2. Run tests.
-3. Run integration/end-to-end checks.
-4. Build Docker images.
-5. Validate Compose.
-6. Prepare AWS only after local acceptance.
+\n

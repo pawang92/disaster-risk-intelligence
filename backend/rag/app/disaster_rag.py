@@ -63,7 +63,7 @@ class DisasterRag:
         return SentenceTransformer(
             self.settings.local_embedding_model,
             device="cpu",
-            local_files_only=True,
+            local_files_only=self.settings.local_embedding_files_only,
         )
 
     def embed(self, text: str, kind: str = "passage") -> list[float]:

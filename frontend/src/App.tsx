@@ -5,8 +5,8 @@ import {
   MousePointer2, PanelLeftClose, RefreshCw, ShieldAlert, Sparkles,
   Waves, X,
 } from 'lucide-react';
-import { api, formatNumber, type AnalysisResult, type DatasetFile, type GuidanceResult, type Overview, type RasterPreview } from './api';
-import type { DrawMode } from './components/MapCanvas';
+import { api, formatNumber, type AnalysisResult, type DatasetFile, type GuidanceResult, type Overview, type RasterPreview, type RiskAssessmentResponse, type SystemStatus } from './api';
+import type { Basemap, DrawMode } from './components/MapCanvas';
 
 const MapCanvas = lazy(() => import('./components/MapCanvas').then((module) => ({ default: module.MapCanvas })));
 
@@ -30,15 +30,22 @@ function prettyLayerName(name: string) {
 
 function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [vectors, setVectors] = useState<Record<string, GeoJSON.FeatureCollection>>({});
   const [rasters, setRasters] = useState<Record<string, RasterPreview>>({});
   const [visibility, setVisibility] = useState<Record<string, boolean>>({});
   const [askMode, setAskMode] = useState<AskMode>('spatial');
   const [drawMode, setDrawMode] = useState<DrawMode>('navigate');
+  const [basemap, setBasemap] = useState<Basemap>('satellite');
   const [selection, setSelection] = useState<GeoJSON.Geometry | null>(null);
   const [query, setQuery] = useState('');
   const [queryState, setQueryState] = useState<QueryState>('idle');
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [assessment, setAssessment] = useState<RiskAssessmentResponse | null>(null);
+  const [assessmentLoading, setAssessmentLoading] = useState(false);
+  const [assessmentError, setAssessmentError] = useState('');
+  const [latitude, setLatitude] = useState('19.0760');
+  const [longitude, setLongitude] = useState('72.8777');
   const [guidance, setGuidance] = useState<GuidanceResult | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -54,6 +61,8 @@ function App() {
     try {
       const data = await api<Overview>('/overview');
       setOverview(data);
+      const serviceStatus = await api<SystemStatus>('/system/status').catch(() => null);
+      setSystemStatus(serviceStatus);
       setVisibility((previous) => {
         const next = { ...previous };
         data.layers.forEach((layer) => {
@@ -89,9 +98,18 @@ function App() {
   useEffect(() => { void loadWorkspace(); }, [loadWorkspace]);
 
   const availableLayers = useMemo(() => overview?.layers.filter((layer) => layer.available) ?? [], [overview]);
+  const dependencyDegraded = Boolean(systemStatus && (
+    systemStatus.guidance.status !== 'healthy' || systemStatus.postgis.status === 'unavailable'
+  ));
   const featureCount = useMemo(() => Object.values(vectors).reduce((total, collection) => total + collection.features.length, 0) + (analysis?.feature_collection.features.length ?? 0), [analysis, vectors]);
   const files = overview?.data_files ?? [];
   const visibleFiles = catalogExpanded ? files : files.slice(0, 6);
+  const exposureBreakdown = assessment?.exposure ? [
+    { label: 'Population', value: assessment.exposure.affected_population_percentage },
+    { label: 'Buildings', value: typeof assessment.exposure.details.affected_building_percentage === 'number' ? assessment.exposure.details.affected_building_percentage : null },
+    { label: 'Roads', value: typeof assessment.exposure.details.affected_road_percentage === 'number' ? assessment.exposure.details.affected_road_percentage : null },
+    { label: 'Critical assets', value: typeof assessment.exposure.details.affected_critical_asset_percentage === 'number' ? assessment.exposure.details.affected_critical_asset_percentage : null },
+  ] : [];
 
   const changeMode = (mode: AskMode) => {
     setAskMode(mode);
@@ -139,15 +157,49 @@ function App() {
 
   const setLayerVisible = (id: string, checked: boolean) => setVisibility((current) => ({ ...current, [id]: checked }));
 
+  const runRiskAssessment = async (event: FormEvent) => {
+    event.preventDefault();
+    setAssessmentLoading(true);
+    setAssessmentError('');
+    try {
+      const result = await api<RiskAssessmentResponse>('/risk/assess', {
+        method: 'POST',
+        body: JSON.stringify({
+          location: { district: 'Mumbai Suburban', state: 'Maharashtra', latitude: Number(latitude), longitude: Number(longitude) },
+          hazard: 'flood',
+          question: 'Assess flood risk and summarize the observed evidence and exposure at this location.',
+          include_exposure: true,
+          include_evidence: true,
+          include_recommendations: true,
+        }),
+      });
+      setAssessment(result);
+    } catch (error) {
+      setAssessmentError(error instanceof Error ? error.message : 'Assessment could not be completed.');
+    } finally {
+      setAssessmentLoading(false);
+    }
+  };
+
   const exportGeoJson = () => {
-    const collection = analysis?.feature_collection ?? {
+    const collection = assessment?.map_data ?? analysis?.feature_collection ?? {
       type: 'FeatureCollection' as const,
       features: Object.values(vectors).flatMap((layer) => layer.features),
     };
     const blob = new Blob([JSON.stringify(collection, null, 2)], { type: 'application/geo+json' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = analysis ? 'geoai-analysis.geojson' : 'disaster-risk-layers.geojson';
+    link.download = assessment ? 'flood-risk-assessment.geojson' : analysis ? 'geoai-analysis.geojson' : 'disaster-risk-layers.geojson';
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  const exportAssessment = () => {
+    if (!assessment) return;
+    const blob = new Blob([JSON.stringify(assessment, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `flood-assessment-${assessment.request_id}.json`;
     link.click();
     URL.revokeObjectURL(link.href);
   };
@@ -166,14 +218,18 @@ function App() {
         <button className="workspace-picker"><span className="workspace-avatar">M</span><span className="workspace-copy"><b>Mumbai Suburban</b><small>Flood resilience workspace</small></span><ChevronDown size={15} /></button>
         <div className="sidebar-section-label nav-label">PLATFORM</div>
         <nav className="nav-list">
-          <a className="nav-item selected" href="#overview"><span className="nav-glyph"><Activity size={16} /></span><span>Risk overview</span></a>
-          <a className="nav-item" href="#map"><span className="nav-glyph"><MapIcon size={16} /></span><span>Spatial workspace</span><span className="nav-count">{availableLayers.length}</span></a>
-          <a className="nav-item" href="#operations"><span className="nav-glyph"><Sparkles size={16} /></span><span>GIS operations</span></a>
-          <a className="nav-item" href="#catalog"><span className="nav-glyph"><Database size={16} /></span><span>Data catalog</span></a>
-          <a className="nav-item" href="#agents"><span className="nav-glyph"><Bot size={16} /></span><span>Agent workflow</span></a>
+          <a className="nav-item selected" href="#overview"><span className="nav-glyph"><Activity size={16} /></span><span>Overview</span></a>
+          <a className="nav-item" href="#risk-assessment"><span className="nav-glyph"><ShieldAlert size={16} /></span><span>Risk assessment</span></a>
+          <a className="nav-item" href="#map"><span className="nav-glyph"><MapIcon size={16} /></span><span>Live risk map</span><span className="nav-count">{availableLayers.length}</span></a>
+          <a className="nav-item" href="#exposure"><span className="nav-glyph"><Building2 size={16} /></span><span>Exposure analysis</span></a>
+          <a className="nav-item" href="#history"><span className="nav-glyph"><Activity size={16} /></span><span>Historical analysis</span></a>
+          <a className="nav-item" href="#operations"><span className="nav-glyph"><Sparkles size={16} /></span><span>AI disaster copilot</span></a>
+          <a className="nav-item" href="#reports"><span className="nav-glyph"><FileText size={16} /></span><span>Reports</span></a>
+          <a className="nav-item" href="#catalog"><span className="nav-glyph"><Database size={16} /></span><span>Data management</span></a>
+          <a className="nav-item" href="#system"><span className="nav-glyph"><Bot size={16} /></span><span>System monitoring</span></a>
         </nav>
         <div className="sidebar-bottom">
-          <div className="service-health"><span className={`health-dot ${loading ? 'loading' : loadError ? 'offline' : ''}`} /><div><b>{loading ? 'Connecting to workspace' : loadError ? 'API unavailable' : 'Local stack connected'}</b><small>{loading ? 'Discovering local datasets' : loadError ? 'Start the FastAPI service' : `${availableLayers.filter((layer) => layer.kind !== 'raster' || rasters[layer.id]).length} map services ready`}</small></div></div>
+          <div className="service-health"><span className={`health-dot ${loading ? 'loading' : loadError || dependencyDegraded ? 'offline' : ''}`} /><div><b>{loading ? 'Connecting to workspace' : loadError ? 'Risk API unavailable' : dependencyDegraded ? 'A dependency is unavailable' : 'Risk API connected'}</b><small>{loading ? 'Discovering local datasets' : loadError ? 'Start the FastAPI service on port 8000' : `RAG ${systemStatus?.guidance.status ?? 'unknown'} · ${availableLayers.filter((layer) => layer.kind !== 'raster' || rasters[layer.id]).length} map services`}</small></div></div>
           <div className="profile-row"><div className="profile-avatar">DR</div><div><b>Risk analyst</b><small>Local development</small></div><button className="more-button" aria-label="Account options">···</button></div>
         </div>
       </aside>
@@ -195,11 +251,35 @@ function App() {
           {!metrics.length && Array.from({ length: 4 }, (_, index) => <article className="metric-card skeleton" key={index}><div /><div /><div /></article>)}
         </section>
 
+        <section className="assessment-grid" id="risk-assessment">
+          <article className="panel assessment-form-panel">
+            <div className="panel-heading"><div><div className="panel-overline">RISK ASSESSMENT</div><h2>Run a flood assessment</h2></div><span className="risk-pill"><i />FLOOD ENGINE</span></div>
+            <p className="assessment-copy">Run the backend risk engine against the configured rainfall, elevation, flood extent, history, and exposure sources.</p>
+            <form className="assessment-form" onSubmit={runRiskAssessment}>
+              <label>District<input value="Mumbai Suburban" readOnly /></label>
+              <label>Hazard<select value="flood" disabled><option value="flood">Flood</option></select></label>
+              <label>Latitude<input type="number" step="any" min="-90" max="90" value={latitude} onChange={(event) => setLatitude(event.target.value)} required /></label>
+              <label>Longitude<input type="number" step="any" min="-180" max="180" value={longitude} onChange={(event) => setLongitude(event.target.value)} required /></label>
+              <div className="assessment-form-actions"><span>{selection?.type === 'Point' ? 'Coordinates taken from the selected map point.' : 'Default coordinates are central Mumbai Suburban; select a map point to change them.'}</span><button className="button-strong" disabled={assessmentLoading}>{assessmentLoading ? <RefreshCw size={14} className="spin" /> : <ShieldAlert size={14} />}{assessmentLoading ? 'Assessing…' : 'Run assessment'}</button></div>
+            </form>
+            {assessmentError && <div className="assessment-error" role="alert">{assessmentError}</div>}
+          </article>
+          <article className={`panel assessment-result-panel ${assessment ? `risk-${assessment.risk_assessment.risk_level}` : ''}`}>
+            <div className="panel-heading"><div><div className="panel-overline">LATEST RESULT</div><h2>{assessment ? 'Flood risk summary' : 'Assessment output'}</h2></div>{assessment && <span className="method-version">{assessment.risk_assessment.methodology_version ?? 'UNVERSIONED'}</span>}</div>
+            {assessment ? <div className="assessment-result-content">
+              <div className="risk-score-row"><div className="risk-score"><strong>{assessment.risk_assessment.risk_score == null ? '—' : `${Math.round(assessment.risk_assessment.risk_score * 100)}`}</strong><span>{assessment.risk_assessment.risk_score == null ? 'NO SCORE' : 'RISK SCORE / 100'}</span></div><div className="risk-classification"><span className="risk-level-label">CLASSIFICATION</span><b>{assessment.risk_assessment.risk_level.replaceAll('_', ' ').toUpperCase()}</b><small>{assessment.risk_assessment.affected_area_sq_km == null ? 'Affected area unavailable' : `${formatNumber(assessment.risk_assessment.affected_area_sq_km)} km² mapped`}</small></div></div>
+              <div className="factor-list"><div className="quick-label">CONTRIBUTING FACTORS</div>{assessment.risk_assessment.contributing_factors.length ? assessment.risk_assessment.contributing_factors.map((factor) => <span key={factor}><i />{prettyLayerName(factor)}</span>) : <small>No contributing factors were returned.</small>}</div>
+              {assessment.recommendations.length > 0 && <div className="recommendation-list"><div className="quick-label">RECOMMENDED ACTIONS</div>{assessment.recommendations.map((recommendation, index) => <div key={`${recommendation.action}-${index}`}><b>{recommendation.priority.toUpperCase()}</b><span>{recommendation.action}</span></div>)}</div>}
+              <div className="assessment-explanation">{assessment.explanation}</div>
+            </div> : <div className="assessment-empty"><span><ShieldAlert size={17} /></span><div><b>No assessment has been run</b><small>Risk scores and exposure values will appear here from the backend response.</small></div></div>}
+          </article>
+        </section>
+
         <section className="workspace-grid" id="map">
           <article className="panel map-panel">
             <div className="panel-heading map-heading"><div><div className="panel-overline">SPATIAL WORKSPACE</div><h2>Live hazard map</h2></div><div className="map-heading-actions"><span className={`map-status ${mapReady ? 'ready' : ''}`}><i />{mapReady ? 'MAP READY' : 'CONNECTING'}</span><button className="panel-icon" title="Refresh data" onClick={() => void loadWorkspace()}><RefreshCw size={15} /></button></div></div>
             <div className="map-toolbar"><div className="draw-tools"><button className={drawMode === 'navigate' ? 'tool-active' : ''} onClick={() => setDrawMode('navigate')} title="Pan and explore"><MousePointer2 size={15} />Explore</button><button className={drawMode === 'point' ? 'tool-active' : ''} onClick={() => setDrawMode('point')} title="Choose a location"><MapPin size={15} />Point</button><button className={drawMode === 'polygon' ? 'tool-active' : ''} onClick={() => setDrawMode('polygon')} title="Click points, double-click to finish"><Layers3 size={15} />Draw area</button>{selection && <button className="clear-selection" onClick={() => setSelection(null)}><X size={13} />Clear</button>}</div><div className="map-feature-count"><span className="metric-dot" />{formatNumber(featureCount)} features loaded</div></div>
-            <div className="map-container"><Suspense fallback={<div className="map-loading">Starting MapLibre GL…</div>}><MapCanvas ready={mapReady} layers={availableLayers} vectors={vectors} rasters={rasters} visibility={visibility} result={analysis?.feature_collection} selection={selection} drawMode={drawMode} onPoint={(point) => { setSelection(point); setDrawMode('navigate'); }} onPolygon={(polygon) => { setSelection(polygon); setDrawMode('navigate'); }} onMapReady={setMapReady} /></Suspense></div>
+            <div className="map-container"><Suspense fallback={<div className="map-loading">Starting MapLibre GL…</div>}><MapCanvas ready={mapReady} basemap={basemap} onBasemapChange={setBasemap} layers={availableLayers} vectors={vectors} rasters={rasters} visibility={visibility} result={assessment?.map_data ?? analysis?.feature_collection} selection={selection} drawMode={drawMode} onPoint={(point) => { setSelection(point); setLatitude(point.coordinates[1].toFixed(6)); setLongitude(point.coordinates[0].toFixed(6)); setDrawMode('navigate'); }} onPolygon={(polygon) => { setSelection(polygon); setDrawMode('navigate'); }} onMapReady={setMapReady} /></Suspense></div>
             <div className="map-footer"><span><span className="map-footer-dot" />{selection?.type === 'Point' ? 'Point selected' : selection ? 'Polygon selected' : 'Select a point or draw a polygon to provide map context'}</span><span>EPSG:4326 <b>·</b> MapLibre GL</span></div>
             <div className="map-layer-control"><div className="layer-control-title"><span><Layers3 size={14} /> MAP LAYERS</span><span>{availableLayers.length}</span></div><div className="layer-control-list">{availableLayers.map((layer) => <label key={layer.id} className="layer-control-row"><input type="checkbox" checked={visibility[layer.id] ?? true} onChange={(event) => setLayerVisible(layer.id, event.target.checked)} /><i style={{ background: layer.color }} /><span>{layer.label}</span><small>{layer.feature_count == null ? 'RASTER' : formatNumber(layer.feature_count)}</small></label>)}</div></div>
           </article>
@@ -219,6 +299,32 @@ function App() {
               {queryState === 'complete' && guidance && <div className="analysis-result"><div className="result-summary"><span className="result-success"><Check size={13} />GROUNDED RESPONSE</span><span className="service-tag">{guidance.service}</span></div><p>{guidance.answer}</p>{guidance.citations.length > 0 && <div className="citations"><div className="quick-label">SOURCES</div>{guidance.citations.map((citation, index) => <div className="citation" key={`${citation.source_key}-${index}`}><b>{citation.source_key}</b><span>{citation.page ? `Page ${citation.page}` : citation.location ?? ''}</span>{citation.excerpt && <p>{citation.excerpt}</p>}</div>)}</div>}</div>}
             </div>
           </aside>
+        </section>
+
+        <section className="lower-grid intelligence-grid" id="exposure">
+          <article className="panel exposure-panel">
+            <div className="panel-heading"><div><div className="panel-overline">EXPOSURE ANALYSIS</div><h2>People and assets in mapped flood extent</h2></div><span className="heading-count">{assessment ? 'ASSESSMENT DATA' : 'RUN AN ASSESSMENT'}</span></div>
+            {assessment?.exposure ? <>
+              <div className="exposure-metrics">
+                <div className="exposure-metric"><small>POPULATION AT RISK</small><b>{formatNumber(assessment.exposure.population_at_risk)}</b><span>{assessment.exposure.affected_population_percentage == null ? 'Share unavailable' : `${formatNumber(assessment.exposure.affected_population_percentage)}% of analysis area`}</span></div>
+                <div className="exposure-metric"><small>BUILDINGS AT RISK</small><b>{formatNumber(assessment.exposure.properties_at_risk)}</b><span>Mapped building footprints</span></div>
+                <div className="exposure-metric"><small>ROADS AT RISK</small><b>{formatNumber(assessment.exposure.roads_at_risk)}</b><span>Road features intersected</span></div>
+                <div className="exposure-metric"><small>CRITICAL ASSETS</small><b>{formatNumber(assessment.exposure.critical_assets_at_risk)}</b><span>Configured infrastructure POIs</span></div>
+              </div>
+              <div className="exposure-breakdown"><div className="quick-label">AFFECTED SHARE BY ASSET TYPE</div>{exposureBreakdown.map((item) => <div className="exposure-bar-row" key={item.label}><span>{item.label}</span><div><i className={item.value == null ? 'bar-unknown' : ''} style={{ width: `${item.value == null ? 0 : Math.max(0, Math.min(100, item.value))}%` }} /></div><b>{item.value == null ? '—' : `${formatNumber(item.value)}%`}</b></div>)}</div>
+              <p className="exposure-footnote">Values and denominators come from the assessment response. A dash means that source is not configured or did not return a value.</p>
+            </> : <div className="assessment-empty"><span><Building2 size={17} /></span><div><b>Exposure metrics are not loaded</b><small>Run an assessment to show estimated people, buildings, roads, and critical assets in the mapped flood extent.</small></div></div>}
+          </article>
+          <article className="panel history-panel" id="history">
+            <div className="panel-heading"><div><div className="panel-overline">HISTORICAL ANALYSIS</div><h2>Historical source data</h2></div><span className="heading-count">{files.filter((file) => /historical|water/i.test(file.category + file.name)).length} FILES</span></div>
+            <div className="history-list">{files.filter((file) => /historical|water/i.test(file.category + file.name)).slice(0, 5).map((file) => <div className="history-row" key={file.path}><span className="history-dot" /><span><b>{file.name}</b><small>{file.category.replaceAll('_', ' ')} · {file.format}</small></span><small>{file.size_bytes > 1048576 ? `${(file.size_bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(file.size_bytes / 1024))} KB`}</small></div>)}{!files.some((file) => /historical|water/i.test(file.category + file.name)) && <div className="history-empty">No historical flood layers were discovered in the configured data folder.</div>}</div>
+            <p className="exposure-footnote">Historical observations provide context; they are not a forecast.</p>
+          </article>
+        </section>
+
+        <section className="lower-grid intelligence-grid" id="reports">
+          <article className="panel report-panel"><div className="panel-heading"><div><div className="panel-overline">REPORTS</div><h2>Export assessment evidence</h2></div><FileText size={18} className="pipeline-icon" /></div><p className="assessment-copy">Download the exact API response, including methodology version, exposure details, recommendations, and mapped GeoJSON.</p><div className="report-actions"><button className="button-outline" onClick={exportGeoJson}><Layers3 size={14} />Export map GeoJSON</button><button className="button-strong" onClick={exportAssessment} disabled={!assessment}><ArrowDownToLine size={14} />Download assessment JSON</button></div><small className="report-note">PDF report generation is not implemented by the backend yet.</small></article>
+          <article className="panel system-panel" id="system"><div className="panel-heading"><div><div className="panel-overline">SYSTEM MONITORING</div><h2>Service health</h2></div><RefreshCw size={16} className={loading ? 'spin' : 'pipeline-icon'} /></div><div className="service-status-list"><div><span className={`status-led ${loadError ? 'status-bad' : loading ? 'status-wait' : ''}`} /><b>Risk API</b><small>{loading ? 'checking' : loadError ? 'unavailable' : 'healthy'}</small></div><div><span className={`status-led ${systemStatus?.guidance.status === 'healthy' ? '' : 'status-bad'}`} /><b>Guidance RAG</b><small>{systemStatus?.guidance.status ?? 'unknown'}</small></div><div><span className={`status-led ${systemStatus?.postgis.status === 'healthy' ? '' : systemStatus?.postgis.status === 'not_checked' ? 'status-wait' : 'status-bad'}`} /><b>PostGIS</b><small>{systemStatus?.postgis.status ?? 'unknown'}</small></div></div><div className="system-meta">Spatial provider: <b>{systemStatus?.spatial_provider ?? 'unknown'}</b>{systemStatus?.guidance.details && <span> · {systemStatus.guidance.details.embedding_provider} embeddings / {systemStatus.guidance.details.answer_provider} answers</span>}</div></article>
         </section>
 
         <section className="lower-grid" id="catalog">
