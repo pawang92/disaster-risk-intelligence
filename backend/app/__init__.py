@@ -1,1 +1,1 @@
-"""Disaster Risk Intelligence application package."""
+"""Disaster Risk Intelligence backend application package."""

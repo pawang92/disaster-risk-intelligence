@@ -15,6 +15,26 @@ class SpatialEngine:
     """
 
     async def resolve(self, location: LocationInput) -> SpatialResult:
+        features: list[dict] = []
+        if location.latitude is not None and location.longitude is not None:
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [
+                            location.longitude,
+                            location.latitude,
+                        ],
+                    },
+                    "properties": {
+                        "village": location.village,
+                        "district": location.district,
+                        "state": location.state,
+                    },
+                }
+            )
+
         return SpatialResult(
             location=SpatialLocation(
                 latitude=location.latitude,
@@ -23,5 +43,6 @@ class SpatialEngine:
                 district=location.district,
                 state=location.state,
             ),
-            source="local-placeholder",
+            map_data={"type": "FeatureCollection", "features": features},
+            source="request-coordinates",
         )

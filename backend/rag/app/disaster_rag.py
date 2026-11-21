@@ -35,7 +35,6 @@ class RetrievedChunk:
 
 class DisasterRag:
     """Local-first RAG service with optional cloud providers."""
-
     def __init__(self, settings: Settings):
         self.settings = settings
         self._last_embedding_at = 0.0
@@ -154,10 +153,8 @@ class DisasterRag:
     def _normalize_filter_value(value: str) -> str:
         return " ".join(str(value).strip().lower().split())
 
-    def _build_where(
-        self,
-        filters: dict[str, str] | None,
-    ) -> dict[str, Any] | None:
+    def _build_where(self, filters: dict[str, str] | None,) -> dict[str, Any] | None:
+        
         if not filters:
             return None
 
@@ -172,12 +169,7 @@ class DisasterRag:
 
         return conditions[0] if len(conditions) == 1 else {"$and": conditions}
 
-    def _query_collection(
-        self,
-        query_embedding: list[float],
-        n_results: int,
-        where: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    def _query_collection( self, query_embedding: list[float], n_results: int, where: dict[str, Any] | None = None,) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "query_embeddings": [query_embedding],
             "n_results": n_results,
@@ -205,8 +197,6 @@ class DisasterRag:
             distances,
         ):
             metadata = metadata or {}
-            # Chroma cosine distance is normally in [0, 2].
-            # Clamp the derived similarity for a stable API contract.
             score = max(0.0, min(1.0, 1.0 - float(distance)))
 
             chunks.append(
@@ -222,11 +212,7 @@ class DisasterRag:
 
         return chunks
 
-    def retrieve(
-        self,
-        question: str,
-        filters: dict[str, str] | None = None,
-    ) -> list[RetrievedChunk]:
+    def retrieve(self, question: str, filters: dict[str, str] | None = None,) -> list[RetrievedChunk]:
         """Retrieve chunks, with a broad-search fallback if filters are too strict."""
         query_embedding = self.embed(question, kind="query")
         where = self._build_where(filters)

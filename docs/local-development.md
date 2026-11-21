@@ -3,6 +3,7 @@
 The primary development environment is local. AWS is not required for development or testing.
 
 ## Current local foundation
+- FastAPI flood risk API
 - FastAPI RAG API
 - Chroma vector store
 - multilingual E5 local embeddings
@@ -10,6 +11,23 @@ The primary development environment is local. AWS is not required for developmen
 - PostgreSQL + PostGIS
 - Redis
 - Docker Compose
+
+## Native flood risk API
+From `backend`:
+
+```cmd
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8001
+```
+
+Health: `http://localhost:8001/health`
+API docs: `http://localhost:8001/docs`
+
+The risk API expects local datasets under `data/` (SRTM, IMERG rainfall, Sentinel-1 flood extent, rivers, historical flood, WorldPop). Building exposure is included when `data/buildings/mumbai_building_footprints.geojson` is present.
+
+Run tests from `backend` with `pytest`.
 
 ## Native RAG development
 From `backend/rag`:

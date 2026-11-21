@@ -16,7 +16,7 @@ from urllib.parse import unquote_plus
 import boto3
 from pypdf import PdfReader
 
-from .bedrock_rag import DisasterRag
+from .disaster_rag import DisasterRag
 from .config import get_settings
 
 

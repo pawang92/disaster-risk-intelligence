@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,7 +23,12 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     allowed_origins: str = "http://localhost:3000,http://localhost:5173"
 
-    postgis_url: str = "postgresql+psycopg://disaster:disaster@localhost:5432/disaster"
+    postgis_url: str = (
+        "postgresql+psycopg://disaster:disaster@localhost:5432/disaster_risk"
+    )
+    building_exposure_backend: Literal["postgis", "file", "disabled"] = "postgis"
+    road_exposure_enabled: bool = False
+    road_exposure_table: str = "mumbai_suburban_roads"
     redis_url: str = "redis://localhost:6379/0"
 
     default_hazard: str = "flood"
