@@ -11,3 +11,4 @@ pytesseract
 pdf2image
 chromadb
 sentence-transformers
+langgraph>=0.2.0,<2.0.0
