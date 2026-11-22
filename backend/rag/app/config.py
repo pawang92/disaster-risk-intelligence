@@ -14,11 +14,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # ------------------------------------------------------------------
-    # LLM providers
-    # ------------------------------------------------------------------
-
-    # Primary provider: grok | gemini | ollama | bedrock
+    # Primary provider: grok | gemini | ollama
     answer_provider: str = "grok"
 
     # Grok 
@@ -37,19 +33,8 @@ class Settings(BaseSettings):
     ollama_model: str = "gemma3:4b"
     ollama_timeout_seconds: float = 180.0
 
-    # ------------------------------------------------------------------
-    # Optional AWS Bedrock
-    # ------------------------------------------------------------------
-
-    aws_region: str = "ap-south-1"
-    bedrock_embedding_model_id: str = "amazon.titan-embed-text-v2:0"
-    bedrock_chat_model_id: str = "anthropic.claude-3-haiku-20240307-v1:0"
-
-    # ------------------------------------------------------------------
     # Embeddings
-    # ------------------------------------------------------------------
 
-    # local | bedrock
     embedding_provider: str = "local"
     local_embedding_model: str = "intfloat/multilingual-e5-base"
     local_embedding_files_only: bool = False
@@ -58,25 +43,19 @@ class Settings(BaseSettings):
     embedding_min_interval_seconds: float = 8.0
     embedding_max_attempts: int = 8
 
-    # ------------------------------------------------------------------
     # Chroma
-    # ------------------------------------------------------------------
 
     chroma_collection: str = "disaster-guidance"
     chroma_path: str = "./.chroma"
 
-    # ------------------------------------------------------------------
     # Retrieval
-    # ------------------------------------------------------------------
 
     retrieval_k: int = 6
     retrieval_fallback_k: int = 3
     min_retrieval_score: float = 0.20
     max_context_characters: int = 12000
 
-    # ------------------------------------------------------------------
     # Application / ingestion
-    # ------------------------------------------------------------------
 
     debug: bool = False
     source_bucket: str = ""

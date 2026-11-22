@@ -16,7 +16,6 @@ from .schema import Citation
 @dataclass
 class RetrievedChunk:
     """A document chunk retrieved from the vector database."""
-
     text: str
     document_id: str
     source_key: str
@@ -39,16 +38,6 @@ class DisasterRag:
         self.settings = settings
         self._last_embedding_at = 0.0
         self._bedrock = None
-
-    @property
-    def bedrock(self):
-        """Create the Bedrock client only when Bedrock is actually used."""
-        if self._bedrock is None:
-            self._bedrock = boto3.client(
-                "bedrock-runtime",
-                region_name=self.settings.aws_region,
-            )
-        return self._bedrock
 
     @cached_property
     def local_embedder(self):
@@ -526,7 +515,6 @@ class DisasterRag:
             "grok": self._answer_with_grok,
             "gemini": self._answer_with_gemini,
             "ollama": self._answer_with_ollama,
-            "bedrock": self._answer_with_bedrock,
         }
 
         provider = self.settings.answer_provider.strip().lower()
