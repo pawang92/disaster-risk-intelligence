@@ -1,5 +1,5 @@
-from backend.rag.app.disaster_rag import RetrievedChunk
-from backend.rag.app.workflow import (
+from app.disaster_rag import RetrievedChunk
+from app.workflow import (
     NO_EVIDENCE_ANSWER,
     UNVERIFIED_ANSWER,
     build_rag_graph,
