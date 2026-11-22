@@ -45,7 +45,22 @@ python -m app.ingest "C:\path\to\flood-guidance.pdf" --district mumbai --disaste
 
 The CLI writes to the configured Chroma path. Keep the index directory persistent and backed up. Re-ingest into a new collection and verify it before switching if you change embedding models; vectors from different embedding models must not be mixed.
 
-## 3. Start the RAG API
+## 3. Run the RAG tests
+
+From `backend/rag/` with the RAG virtual environment activated:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+python -m compileall -q app
+python -m pip check
+```
+
+The Phase 1 tests cover the LangGraph retrieval/generation/validation flow,
+citation-reference validation, evidence abstention, and the rule that
+requested district/disaster filters must never be silently removed.
+
+## 4. Start the RAG API
 
 From `backend/rag/`:
 
