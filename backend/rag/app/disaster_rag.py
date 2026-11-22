@@ -202,7 +202,12 @@ class DisasterRag:
         return chunks
 
     def retrieve(self, question: str, filters: dict[str, str] | None = None,) -> list[RetrievedChunk]:
-        """Retrieve chunks, with a broad-search fallback if filters are too strict."""
+        """Retrieve evidence without silently weakening requested filters.
+
+        District and disaster-type filters are safety-relevant constraints.
+        If a filtered query fails or returns no matches, return an error or an
+        empty result rather than searching across unrelated documents.
+        """
         query_embedding = self.embed(question, kind="query")
         where = self._build_where(filters)
 
@@ -212,34 +217,17 @@ class DisasterRag:
                 self.settings.retrieval_k,
                 where,
             )
-        except Exception:
-            # A metadata filter should never make the whole RAG service
-            # unavailable. Retry without the filter.
+        except Exception as exc:
             if where:
-                result = self._query_collection(
-                    query_embedding,
-                    self.settings.retrieval_k,
-                    None,
-                )
-            else:
-                raise
+                raise RuntimeError(
+                    "Filtered retrieval failed; refusing an unfiltered search."
+                ) from exc
+            raise
 
         chunks = self._to_chunks(result)
 
-        # If a strict filter produced no result, retry broadly. This protects
-        # against historical metadata casing/format differences.
-        if not chunks and where:
-            result = self._query_collection(
-                query_embedding,
-                max(
-                    self.settings.retrieval_k,
-                    self.settings.retrieval_fallback_k,
-                ),
-                None,
-            )
-            chunks = self._to_chunks(result)
-
-        # Do not return obviously irrelevant results when a threshold is set.
+        # An empty filtered result is an abstention, not a reason to broaden
+        # the search beyond the user's requested district or hazard.
         if self.settings.min_retrieval_score > 0:
             chunks = [
                 chunk
